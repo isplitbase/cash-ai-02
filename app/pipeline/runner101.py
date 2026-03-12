@@ -42,8 +42,34 @@ def _run(cmd, cwd: Path, env: dict):
     return p
 
 
-def _patch_report_html_for_cloudrun(html_path: Path, port_value: str | None = None) -> None:
+def _build_request_data_script_tag(payload: Any) -> str:
+    data = []
+    if isinstance(payload, dict):
+        raw_data = payload.get("data")
+        if isinstance(raw_data, list):
+            data = raw_data
+
+    json_for_html = json.dumps({"data": data}, ensure_ascii=False)
+    json_for_html = (
+        json_for_html
+        .replace("</", "<\\/")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
+    )
+    return "<script>\nwindow.__CASH_AI_SAVE_DATA__ = " + json_for_html + ";\n</script>"
+
+
+def _patch_report_html_for_cloudrun(html_path: Path, port_value: str | None = None, request_payload: Any = None) -> None:
     html = html_path.read_text(encoding="utf-8")
+
+    script_tag = _build_request_data_script_tag(request_payload)
+    if "window.__CASH_AI_SAVE_DATA__" not in html:
+        if "</head>" in html:
+            html = html.replace("</head>", script_tag + "\n</head>", 1)
+        elif "<body>" in html:
+            html = html.replace("<body>", "<body>\n" + script_tag, 1)
+        else:
+            html = script_tag + "\n" + html
 
     if port_value is not None:
         js_port_literal = json.dumps(str(port_value))
@@ -236,7 +262,7 @@ def run_colab101(payload: Any) -> Dict[str, Any]:
         if not html_path.exists():
             raise RuntimeError("report.html が生成されませんでした。")
 
-        _patch_report_html_for_cloudrun(html_path, port_value=_extract_port(payload))
+        _patch_report_html_for_cloudrun(html_path, port_value=_extract_port(payload), request_payload=payload)
         html_url = _upload_html_and_presign(html_path)
 
         return {"html": html_url, "data": data}
