@@ -26,13 +26,9 @@ except Exception:
     HTML = None
     display = None
 
-# --- Colab専用：JS→Python コールバック登録 ---
-try:
-    from google.colab import output as colab_output
-    _IS_COLAB = True
-except Exception:
-    colab_output = None
-    _IS_COLAB = False
+# Cloud Run / EC2 用: Colab 専用機能は使わない
+colab_output = None
+_IS_COLAB = False
 
 # 保存先（Colab実行ディレクトリ）
 OUTPUT_PATH = "output_updated.json"
@@ -140,7 +136,7 @@ def _save_output_updated_json(payload):
         return {"ok": False, "error": str(e)}
 
 
-# Colab上なら callback を登録
+# Cloud Run / EC2 用: Colab callback は使わない
 if _IS_COLAB:
     colab_output.register_callback("save_output_updated_json", _save_output_updated_json)
 
@@ -5451,14 +5447,15 @@ except Exception as _e:
     print(f"⚠️ CF計算書の生成でエラー: {_e}")
     traceback.print_exc()
 
-display(HTML(
-    style + data_tag + script + modal_html +
-    action_buttons_vertical +
-    f'<div id="report-container" class="show-all">'
-    f'{_spec_warning_html}{full_html}'
-    f'</div>'
-    + action_buttons_vertical
-))
+if (not NO_HTML) and display and HTML:
+    display(HTML(
+        style + data_tag + script + modal_html +
+        action_buttons_vertical +
+        f'<div id="report-container" class="show-all">'
+        f'{_spec_warning_html}{full_html}'
+        f'</div>'
+        + action_buttons_vertical
+    ))
 
 
 # ------------------------------------------------------------------
