@@ -664,11 +664,11 @@ style = """
 
     .excel-table th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
 
-    .w-v { width: 28px !important; }
-    .w-subject { width: 300px !important; }
+    .w-v { width: 24px !important; }
+    .w-subject { width: 220px !important; white-space: normal !important; }
 
-    .excel-table col.c-amt { width: 180px !important; }
-    th.col-amt, td.col-amt { width: 180px !important; text-align: right !important; font-family: "Consolas", monospace; }
+    .excel-table col.c-amt { width: 120px !important; }
+    th.col-amt, td.col-amt { width: 120px !important; text-align: right !important; font-family: "Consolas", monospace; }
     th.col-amt { text-align: center !important; }
 
 /* clickable period header */
@@ -677,17 +677,17 @@ th.clickable-period:hover{background:#e8f0ff;}
 th.clickable-period:focus{outline:2px solid #4d90fe;outline-offset:-2px;}
 
     .excel-table col.c-pct { display: none !important; width: 0px !important; }
-    .col-pct { display: none !important; width: 60px !important; text-align: center !important; font-size: 11px; color: #666; }
+    .col-pct { display: none !important; width: 48px !important; text-align: center !important; font-size: 11px; color: #666; }
 
     .excel-table col.c-diff { display: none !important; width: 0px !important; }
-    .col-diff, .diff-group { display: none !important; width: 180px !important; text-align: right !important; font-family: "Consolas", monospace; }
+    .col-diff, .diff-group { display: none !important; width: 110px !important; text-align: right !important; font-family: "Consolas", monospace; }
     th.col-diff, th.diff-group { text-align: center !important; }
 
-    .excel-table col.c-memo { width: 300px !important; }
-    td.col-memo { width: 300px !important; text-align: left !important; white-space: normal !important; }
+    .excel-table col.c-memo { width: 200px !important; }
+    td.col-memo { width: 200px !important; text-align: left !important; white-space: normal !important; }
 
-    .show-all .excel-table col.c-pct { display: table-column !important; width: 60px !important; }
-    .show-all .excel-table col.c-diff { display: table-column !important; width: 180px !important; }
+    .show-all .excel-table col.c-pct { display: table-column !important; width: 48px !important; }
+    .show-all .excel-table col.c-diff { display: table-column !important; width: 110px !important; }
     .show-all .col-pct, .show-all .col-diff, .show-all .diff-group { display: table-cell !important; }
 
     .btn-container { position: sticky; top: 0; background: white; z-index: 100; padding: 10px 0; display: flex; gap: 10px; border-bottom: 1px solid #ddd; }
