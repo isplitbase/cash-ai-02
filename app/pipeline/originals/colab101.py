@@ -3542,6 +3542,7 @@ window._rebuildKeiei = function() {
 action_buttons_vertical = (
     f'<div class="btn-container vertical">'
     f'<button class="btn" onclick="toggleCols()">表示切替</button>'
+    f'<button class="btn btn-excel" onclick="window._downloadExcel()">エクセルダウンロード</button>'
     f'</div>'
 )
 
