@@ -2863,7 +2863,6 @@ window._rebuildCFTable = function(){
     // ── 勘定科目名インデックス構築（恒久対策版）──────────────────
     function buildNameIndex(data) {
       var idx = {};
-      // 行番号昇順でソートして最初の出現を優先
       var sorted = data.slice().sort(function(a,b){
         return (a["行番号"]||0)-(b["行番号"]||0);
       });
@@ -2874,123 +2873,125 @@ window._rebuildCFTable = function(){
       return idx;
     }
 
+    // ── 候補リスト（Python _ACCT に対応） ──────────────────────
+    var _ACCT_JS = {
+      現金: ["現金及び預金","現金預金","現預金","現金及び預貯金"],
+      棚卸資産: ["棚卸資産計","棚卸資産","在庫","棚卸高","棚卸資産合計"],
+      その他流動資産: ["その他流動資産計","その他の流動資産計","その他流動資産",
+                      "その他の流動資産","その他流動資産合計"],
+      未払法人税: ["未払法人税等","未払法人税","法人税等未払金",
+                  "未払法人税・住民税及び事業税","未払税金"],
+      投資その他資産: ["投資その他の資産合計","投資その他資産合計","投資等合計",
+                      "投資その他の資産","投資及びその他の資産合計"],
+      役員借入金: ["役員長期借入金","役員借入金","関係者長期借入金",
+                  "役員等長期借入金","関連当事者借入金"],
+      資本剰余金: ["資本剰余金","資本準備金","その他資本剰余金","資本剰余金合計"],
+      引当金_リスト: ["賞与引当金","役員賞与引当金","退職給付引当金","退職給付に係る負債",
+                     "貸倒引当金","未払費用","仮受金","前受収益","預り金"],
+    };
+
+    // 候補リストを合算（存在する科目だけ足す）
+    function acctSum(nameIdx, keyList, pk) {
+      var total = 0;
+      for (var i=0; i<keyList.length; i++) {
+        var r = nameIdx[keyList[i]];
+        if (r) { var v = r[pk]; total += (v==null||v==="") ? 0 : (parseFloat(v)||0); }
+      }
+      return total;
+    }
+    // 候補リストの最初にヒットした科目の値を返す
+    function acctFirst(nameIdx, keyList, pk) {
+      for (var i=0; i<keyList.length; i++) {
+        var r = nameIdx[keyList[i]];
+        if (r) { var v = r[pk]; return (v==null||v==="") ? 0 : (parseFloat(v)||0); }
+      }
+      return 0;
+    }
+
     function calcCF(p_from, p_to) {
-      // 勘定科目名でdata_dictを参照（行番号に依存しない）
       var nameIdx = buildNameIndex(window.reportData || []);
 
       function vn(name, pk) {
-        // 勘定科目名と期間で値を取得
         var r = nameIdx[name];
         if (!r) return 0;
         var v = r[pk];
-        return (v == null || v === "") ? 0 : parseFloat(v) || 0;
+        return (v==null||v==="") ? 0 : parseFloat(v)||0;
       }
       function v(name)  { return vn(name, p_to);   }
       function vm(name) { return vn(name, p_from);  }
       function d(name)  { return v(name)-vm(name);  }
+      function fa(lst)  { return acctSum(nameIdx, lst, p_to) - acctSum(nameIdx, lst, p_from); }
+      function ff(lst)  { return acctFirst(nameIdx, lst, p_to) - acctFirst(nameIdx, lst, p_from); }
       function rdd(rn, pk) {
-        // dd行番号で直接取得（当期純利益・減価償却費など固定行用）
         var r = dd[rn];
         if (!r) return 0;
         var val = r[pk];
         return (val==null||val==="") ? 0 : parseFloat(val)||0;
       }
 
-      // ── 営業CF ────────────────────────────────────────────────
-      // c9: 当期純利益（dd154直接参照）
-      var c9 = Math.round(rdd(154, p_to));
+      var genkin_from = acctFirst(nameIdx, _ACCT_JS.現金, p_from);
+      var genkin_to   = acctFirst(nameIdx, _ACCT_JS.現金, p_to);
 
-      // c11: 減価償却費（dd161直接参照）
+      // ── 営業CF ────────────────────────────────────────────────
+      var c9  = Math.round(rdd(154, p_to));
+
       var dep161 = rdd(161, p_to);
       if (dep161 === 0) dep161 = rdd(90,p_to)+rdd(125,p_to)+rdd(126,p_to);
       var c11 = Math.round(dep161);
 
-      // c12: 引当金（未払金＋預り金の増減）
-      var c12 = Math.round(d("未払金") + d("預り金"));
+      // c12: 引当金候補リストを全て合算
+      var c12 = Math.round(fa(_ACCT_JS.引当金_リスト));
 
-      // c14: 受取手形
       var c14 = Math.round(-d("受取手形"));
-
-      // c15: 売掛金
       var c15 = Math.round(-d("売掛金"));
-
-      // c16: 棚卸資産
-      var c16 = Math.round(-d("棚卸資産計"));
-
-      // c17: その他流動資産（直接参照）
-      var c17 = Math.round(-d("その他流動資産計"));
-
-      // c18: 支払手形
+      var c16 = Math.round(-ff(_ACCT_JS.棚卸資産));
+      var c17 = Math.round(-ff(_ACCT_JS.その他流動資産));
       var c18 = Math.round(d("支払手形"));
-
-      // c19: 買掛金
       var c19 = Math.round(d("買掛金"));
-
-      // c20: 前受金
       var c20 = 0;
+      var c20b = Math.round(ff(_ACCT_JS.未払法人税));
 
-      // c21: その他流動負債（流動負債合計から既計上科目を除いた残差）
+      // c21: 流動負債合計 - 既計上科目の残差
       var c21 = Math.round(
         d("流動負債合計")
         - d("買掛金") - d("未払金")
-        - d("未払法人税等") - d("預り金") - d("支払手形")
+        - ff(_ACCT_JS.未払法人税)
+        - fa(_ACCT_JS.引当金_リスト)
+        - d("支払手形")
       );
 
-      // c22: その他固定負債（固定負債合計から長期借入金・役員長期借入金を除いた残差）
+      // c22: 固定負債合計 - 長期借入金 - 役員長期借入金（候補リスト）
       var c22 = Math.round(
-        d("固定負債合計") - d("長期借入金") - d("役員長期借入金")
+        d("固定負債合計") - d("長期借入金") - ff(_ACCT_JS.役員借入金)
       );
 
       var c23 = 0;
-      var c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c21+c22+c23;
+      var c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c20b+c21+c22+c23;
 
       // ── 投資CF ────────────────────────────────────────────────
-      // c28: 土地
       var c28 = Math.round(-d("土地"));
-
-      // c29: 減価償却資産（有形固定資産合計－土地の増減＋減価償却費）
       var hyt_to   = v("有形固定資産合計") - v("土地");
       var hyt_from = vm("有形固定資産合計") - vm("土地");
       var c29 = Math.round(-((hyt_to - hyt_from) + c11));
-
-      // c30: 建設仮勘定
       var c30 = Math.round(-d("建設仮勘定"));
-
-      // c31: 無形固定資産
       var c31 = Math.round(-d("無形固定資産"));
-
-      // c34: その他固定資産
-      var c34 = Math.round(-d("投資その他の資産合計"));
-
-      // c35: 繰延資産
+      var c34 = Math.round(-ff(_ACCT_JS.投資その他資産));
       var c35 = Math.round(-d("繰延資産"));
-
       var c36 = c28+c29+c30+c31+c34+c35;
       var c37 = c24+c36;
 
       // ── 財務CF ────────────────────────────────────────────────
-      // c39: 短期借入金（科目が存在する場合のみ）
       var c39 = ("短期借入金" in nameIdx) ? Math.round(d("短期借入金")) : 0;
-
-      // c40: 長期借入金
+      c39 += Math.round(d("未払金"));
       var c40 = Math.round(d("長期借入金"));
-
-      // c41: 役員長期借入金（社債等）
-      var c41 = Math.round(d("役員長期借入金"));
-
-      // c42: 増資（資本金＋資本剰余金）
-      var c42 = Math.round(d("資本金") + d("資本剰余金"));
-
-      // c43: 自己株式
+      var c41 = Math.round(ff(_ACCT_JS.役員借入金));
+      var c42 = Math.round(d("資本金") + ff(_ACCT_JS.資本剰余金));
       var c43 = ("自己株式" in nameIdx) ? Math.round(d("自己株式")) : 0;
 
-      // c44: 配当金＋役員賞与（繰越利益剰余金ベース自動計算）
-      // 表記ゆれに対応した優先順位検索
+      // c44: 繰越利益剰余金ベース自動計算
       var _rCandidates = [
-        "うち繰越利益剰余金",
-        "繰越利益剰余金",
-        "繰越利益剰余金・前期末残高",
-        "利益剰余金合計"
+        "うち繰越利益剰余金","繰越利益剰余金",
+        "繰越利益剰余金・前期末残高","利益剰余金合計"
       ];
       var rieki_to = 0, rieki_from = 0;
       for (var ci=0; ci<_rCandidates.length; ci++) {
@@ -3000,19 +3001,16 @@ window._rebuildCFTable = function(){
           break;
         }
       }
-      var rieki70_diff = rieki_to - rieki_from;
-      var junri154 = rdd(154, p_to);
-      var c44 = -Math.round(junri154 - rieki70_diff);
-      var c23b = 0;
+      var c44 = -Math.round(rdd(154, p_to) - (rieki_to - rieki_from));
 
       var c45 = c39+c40+c41+c42+c43+c44;
       var c46 = c24+c36+c45;
-      var c47 = Math.round(vm("現金及び預金"));
+      var c47 = Math.round(genkin_from);
       var c48 = c46+c47;
-      var c49 = Math.round(v("現金及び預金"));
+      var c49 = Math.round(genkin_to);
       var c50 = c48-c49;
 
-      return {c9,c11,c12,c14,c15,c16,c17,c18,c19,c20,c21,c22,c23,c24,
+      return {c9,c11,c12,c14,c15,c16,c17,c18,c19,c20,c20b,c21,c22,c23,c24,
               c28,c29,c30,c31,c34,c35,c36,c37,
               c39,c40,c41,c42,c43,c44,c45,c46,c47,c48,c49,c50};
     }
@@ -3527,6 +3525,205 @@ def _write_block_rows(ws, xl_row, ranges, layout):
 # ------------------------------------------------------------------
 # メイン
 # ------------------------------------------------------------------
+
+def _write_cf_sheet(wb, cf_data, closing_dates):
+    """
+    既存のCF計算書シートレイアウトに準拠してシートを生成・上書きする。
+    レイアウト:
+      A列: 前期ラベル, B列: 前期値, C列: 区切り, D列: 今期ラベル, E列: 今期値
+      行1: タイトル(A1:E1結合), 行2: 単位(A2:E2結合)
+      行3: 期ラベル, 行4: 決算日
+      行5〜: CF明細
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    # 既存シートがあれば削除して再作成
+    if "CF計算書" in wb.sheetnames:
+        del wb["CF計算書"]
+    ws = wb.create_sheet("CF計算書")
+    ws.sheet_view.showGridLines = False
+
+    # 列幅（既存に準拠）
+    for col, w in [("A",52),("B",18),("C",4),("D",52),("E",18),("F",2)]:
+        ws.column_dimensions[col].width = w
+
+    period_zenki = cf_data.get("period_zenki", "前期")
+    period_konki = cf_data.get("period_konki", "今期")
+    zenki = cf_data["zenki"]
+    konki = cf_data["konki"]
+
+    # ── カラー定数（既存シートのスタイルに準拠） ──
+    BG_TITLE  = "4472C4"  # タイトル行（青）
+    BG_H0     = "1B4F72"  # 大見出し（濃紺）
+    BG_DETAIL = "FFFFFF"  # 明細行（白）
+    BG_TOTAL  = "D9EAD3"  # 小計行（薄緑）
+    BG_CHECK  = "FFF2CC"  # 照合行（薄黄）
+    FG_WHITE  = "FFFFFF"
+    FG_DARK   = "333333"
+
+    thin = Side(style="thin", color="AAAAAA")
+    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
+    no_bdr = Border()
+
+    NUM_FMT = '#,##0;-#,##0;"-"'
+
+    def sw(r, c, val="", bg=BG_DETAIL, fg=FG_DARK, bold=False,
+           ha="left", fmt=None, size=9, merge_to=None):
+        cell = ws.cell(row=r, column=c, value=val)
+        cell.fill      = PatternFill("solid", fgColor=bg)
+        cell.font      = Font(color=fg, bold=bold, name="Meiryo", size=size)
+        cell.alignment = Alignment(horizontal=ha, vertical="center")
+        cell.border    = bdr
+        if fmt: cell.number_format = fmt
+        if merge_to:
+            ws.merge_cells(start_row=r, start_column=c,
+                           end_row=merge_to[0], end_column=merge_to[1])
+        return cell
+
+    def sw_num(r, c, val, bg=BG_DETAIL, fg=FG_DARK, bold=False):
+        if val is None:
+            sw(r, c, "", bg=bg, fg=fg, bold=bold, ha="right")
+        else:
+            sw(r, c, int(val), bg=bg, fg=fg, bold=bold, ha="right", fmt=NUM_FMT)
+
+    def ii(d):   return d["c28"]+d["c29"]+d["c30"]+d["c31"]+d["c34"]+d["c35"]
+    def fcf(d):  return d["c24"]+ii(d)
+    def iv(d):   return d["c24"]+ii(d)+d["c45"]
+
+    # ── 行1: タイトル ──────────────────────────
+    ws.row_dimensions[1].height = 20
+    sw(1, 1, "キャッシュ・フロー計算書",
+       bg=BG_TITLE, fg=FG_WHITE, bold=True, size=11, ha="left",
+       merge_to=(1, 5))
+
+    # ── 行2: 単位 ──────────────────────────────
+    ws.row_dimensions[2].height = 13
+    sw(2, 1, "※単位：円", bg=BG_DETAIL, fg="888888", size=9,
+       merge_to=(2, 5))
+
+    # ── 行3: 期ラベル ──────────────────────────
+    ws.row_dimensions[3].height = 17
+    sw(3, 1, "前期", bg=BG_H0, fg=FG_WHITE, bold=True, ha="center",
+       merge_to=(3, 2))
+    sw(3, 3, "", bg=BG_DETAIL)
+    sw(3, 4, "今期", bg=BG_H0, fg=FG_WHITE, bold=True, ha="center",
+       merge_to=(3, 5))
+
+    # ── 行4: 決算日 ──────────────────────────
+    ws.row_dimensions[4].height = 13
+    sw(4, 1, period_zenki, bg=BG_DETAIL, fg=FG_DARK, ha="center",
+       merge_to=(4, 2))
+    sw(4, 3, "", bg=BG_DETAIL)
+    sw(4, 4, period_konki, bg=BG_DETAIL, fg=FG_DARK, ha="center",
+       merge_to=(4, 5))
+
+    # ── CF明細行の定義 ──────────────────────────
+    # (ラベル, lv, zenki_key_or_val, konki_key_or_val)
+    # lv: 0=大見出し 1=中見出し 2=明細 3=小計 99=照合
+    CF_ROWS = [
+        ("Ⅰ　営業活動によるキャッシュ・フロー",                   0, None,    None),
+        ("　（１）当期純利益（＋）",                               2,"c9",   "c9"),
+        ("　（２）非資金の費用項目",                               1, None,   None),
+        ("　　　１．減価償却費（＋）",                     2,"c11",  "c11"),
+        ("　　　２．諸引当金の増加（＋）・減少（－）額",   2,"c12",  "c12"),
+        ("　（３）回収・支払サイト",                               1, None,   None),
+        ("　　　１．受取手形の増加（－）・減少（＋）額",   2,"c14",  "c14"),
+        ("　　　２．売掛金の増加（－）・減少（＋）額",     2,"c15",  "c15"),
+        ("　　　３．棚卸資産の増加（－）・減少（＋）額",   2,"c16",  "c16"),
+        ("　　　４．その他の流動資産の増加（－）・減少（＋）額", 2,"c17","c17"),
+        ("　　　５．支払手形の増加（＋）・減少（－）額",   2,"c18",  "c18"),
+        ("　　　６．買掛金の増加（＋）・減少（－）額",     2,"c19",  "c19"),
+        ("　　　７．前受金の増加（＋）・減少（－）額",     2,"c20",  "c20"),
+        ("　　　８．未払法人税等の増加（＋）・減少（－）額",2,"c20b","c20b"),
+        ("　　　９．その他の流動負債の増加（＋）・減少（－）額",2,"c21","c21"),
+        ("　　１０．その他の固定負債の増加（＋）・減少（－）額",2,"c22","c22"),
+        ("　　１１．利益処分による役員賞与の支払（－）額",     2,"c23",  "c23"),
+        ("（Ⅰの計）",                                                 3,"c24",  "c24"),
+        ("Ⅱ　投資活動によるキャッシュ・フロー",                   0, None,   None),
+        ("　　　１．有価証券の増加（－）・減少（＋）額",   2, None,   None),
+        ("　　　２．短期貸付金の増加（－）・減少（＋）額", 2, None,   None),
+        ("　　　３．土地の増加（－）・減少（＋）額",       2,"c28",  "c28"),
+        ("　　　４．減価償却資産の増加（－）・減少（＋）額",2,"c29", "c29"),
+        ("　　　５．建設仮勘定の増加（－）・減少（＋）額", 2,"c30",  "c30"),
+        ("　　　６．無形固定資産の増加（－）・減少（＋）額",2,"c31", "c31"),
+        ("　　　７．投資有価証券等の増加（－）・減少（＋）額",2,None, None),
+        ("　　　８．長期貸付金の増加（－）・減少（＋）額", 2, None,   None),
+        ("　　　９．その他固定資産等の増加（－）・減少（＋）額",2,"c34","c34"),
+        ("　　１０．繰延資産の増加（－）・減少（＋）額",       2,"c35",  "c35"),
+        ("（Ⅱの計）",                                                 3, None,   None),
+        ("フリーキャッシュ・フロー（Ⅰ＋Ⅱ）",                        3, None,   None),
+        ("Ⅲ　財務活動によるキャッシュ・フロー",                   0, None,   None),
+        ("　　　１．短期借入金の増加（＋）・返済（－）額", 2,"c39",  "c39"),
+        ("　　　２．長期借入金の増加（＋）・返済（－）額", 2,"c40",  "c40"),
+        ("　　　３．社債の発行（＋）・償還（－）額",       2,"c41",  "c41"),
+        ("　　　４．増資等（＋）",                         2,"c42",  "c42"),
+        ("　　　５．自己株式の取得（－）・売却（＋）額",   2,"c43",  "c43"),
+        ("　　　６．配当金の支払（－）額",                 2,"c44",  "c44"),
+        ("（Ⅲの計）",                                                 3, None,   None),
+        ("Ⅳ　現金及び預金の増加（＋）・減少（－）額",              3, None,   None),
+        ("Ⅴ　期首現金及び預金残高",                               2,"c47",  "c47"),
+        ("Ⅵ　期末現金及び預金残高",                               2,"c48",  "c48"),
+        ("検算（貸借対照表の現金及び預金）",                           99,"c49",  "c49"),
+        ("（照合）この欄が０でＯＫ",                                   99,"c50",  "c50"),
+    ]
+
+    r = 5  # データ開始行
+    for label, lv, zk, kk in CF_ROWS:
+        ws.row_dimensions[r].height = 15
+
+        # 値を解決
+        def resolve(d, key, label):
+            if key:             return d.get(key)
+            if "（Ⅱの計）" in label:       return ii(d)
+            if "フリー"    in label:        return fcf(d)
+            if "（Ⅲの計）" in label:       return d.get("c45")
+            if "Ⅳ"        in label:        return iv(d)
+            return None
+
+        z_val = resolve(zenki, zk, label)
+        k_val = resolve(konki, kk, label)
+
+        # スタイル
+        if   lv == 0:  bg, fg, bold = BG_H0,    FG_WHITE, True
+        elif lv == 1:  bg, fg, bold = BG_DETAIL, FG_DARK,  False
+        elif lv == 3:  bg, fg, bold = BG_TOTAL,  FG_DARK,  True
+        elif lv == 99: bg, fg, bold = BG_CHECK,  FG_DARK,  True
+        elif lv == 98: bg, fg, bold = BG_DETAIL, '888888', False
+        else:          bg, fg, bold = BG_DETAIL, FG_DARK,  False
+
+        # 前期側（A:B）
+        if lv == 0:  # 大見出し → A:B結合
+            sw(r, 1, label, bg=bg, fg=fg, bold=bold, merge_to=(r,2))
+        elif lv == 1:  # 中見出し → A:B結合
+            sw(r, 1, label, bg=bg, fg=fg, bold=bold, merge_to=(r,2))
+        else:
+            sw(r, 1, label, bg=bg, fg=fg, bold=bold)
+            sw_num(r, 2, z_val, bg=bg, fg=fg, bold=bold)
+
+        # 区切り列C
+        sw(r, 3, "", bg="F2F2F2")
+
+        # 今期側（D:E）
+        if lv in (0, 1):  # 見出し → D:E結合
+            sw(r, 4, label, bg=bg, fg=fg, bold=bold, merge_to=(r,5))
+        else:
+            sw(r, 4, label, bg=bg, fg=fg, bold=bold)
+            sw_num(r, 5, k_val, bg=bg, fg=fg, bold=bold)
+
+        r += 1
+
+    # 注記行
+    r_note = r
+    ws.row_dimensions[r_note].height = 13
+    sw(r_note, 1,
+       "※千円単位の場合、千円未満の集計による端数が差異として発生する場合があります",
+       bg=BG_DETAIL, fg="888888", size=8, merge_to=(r_note, 5))
+    for c in [2,3,4,5]: ws.cell(r_note, c)  # 結合済みセルの初期化
+
+    return ws
+
+
 def generate_excel_report(output_path="/content/財務分析表.xlsx"):
     # ★ data_dict に 前期増減額/今期増減額 が無い行を再計算してセット
     PKEYS = ["前々期", "前期", "今期"]
@@ -3566,6 +3763,14 @@ def generate_excel_report(output_path="/content/財務分析表.xlsx"):
         xl_row = _write_block_rows(ws, xl_row, ranges, layout)
         xl_row += 1
 
+    # CF計算書シートを追加
+    try:
+        _cf_data_xl = calc_cf_from_data_dict(data_dict, closing_dates)
+        _write_cf_sheet(wb, _cf_data_xl, closing_dates)
+        print("✅ CF計算書シート追加完了")
+    except Exception as _e_cf:
+        print(f"⚠️ CF計算書シート生成エラー: {_e_cf}")
+
     wb.save(output_path)
     print(f"✅ Excelファイルを保存しました: {output_path}")
     return output_path
@@ -3601,6 +3806,82 @@ _FS_TO_DD = {
    165: 148, 167: 150, 168: 151, 170: 153, 182: 161,
 }
 
+# ==================================================================
+# 勘定科目名 候補リスト（表記ゆれ対応・優先順位順）
+# 各リストの先頭が最優先。最初にname_idxに存在するものを使用。
+# ==================================================================
+_ACCT = {
+    # 期首・期末現金
+    '現金': [
+        '現金及び預金', '現金預金', '現預金', '現金及び預貯金',
+    ],
+    # 棚卸資産
+    '棚卸資産': [
+        '棚卸資産計', '棚卸資産', '在庫', '棚卸高', '棚卸資産合計',
+    ],
+    # その他流動資産
+    'その他流動資産': [
+        'その他流動資産計', 'その他の流動資産計', 'その他流動資産',
+        'その他の流動資産', 'その他流動資産合計',
+    ],
+    # 未払法人税等
+    '未払法人税': [
+        '未払法人税等', '未払法人税', '法人税等未払金',
+        '未払法人税・住民税及び事業税', '未払税金',
+    ],
+    # 投資その他の資産合計
+    '投資その他資産': [
+        '投資その他の資産合計', '投資その他資産合計', '投資等合計',
+        '投資その他の資産', '投資及びその他の資産合計',
+    ],
+    # 役員長期借入金
+    '役員借入金': [
+        '役員長期借入金', '役員借入金', '関係者長期借入金',
+        '役員等長期借入金', '関連当事者借入金',
+    ],
+    # 資本剰余金
+    '資本剰余金': [
+        '資本剰余金', '資本準備金', 'その他資本剰余金', '資本剰余金合計',
+    ],
+    # c12 引当金・営業CF性流動負債（複数存在すれば合算）
+    '引当金_リスト': [
+        '賞与引当金', '役員賞与引当金', '退職給付引当金', '退職給付に係る負債',
+        '貸倒引当金', '未払費用', '仮受金', '前受収益', '預り金',
+    ],
+    # c20b 未払法人税等（上記'未払法人税'と同一リスト）
+    # c21控除用（流動負債合計から除くもの）
+    '流動負債_控除': [
+        # 以下を流動負債合計から控除してc21残差を計算
+        # 買掛金・未払金・未払法人税等・預り金・支払手形・c12計上科目
+    ],
+}
+
+def _acct_sum(name_idx, data_dict, key_list, period):
+    """候補リストの科目を合算して返す（存在するものだけ）"""
+    total = 0.0
+    for name in key_list:
+        rn = name_idx.get(name)
+        if rn is not None:
+            v = data_dict.get(rn, {}).get(period, 0)
+            try:
+                total += float(v) if v not in (None, '', '""') else 0.0
+            except:
+                pass
+    return total
+
+def _acct_first(name_idx, data_dict, key_list, period):
+    """候補リストで最初に見つかった科目の値を返す"""
+    for name in key_list:
+        rn = name_idx.get(name)
+        if rn is not None:
+            v = data_dict.get(rn, {}).get(period, 0)
+            try:
+                return float(v) if v not in (None, '', '""') else 0.0
+            except:
+                return 0.0
+    return 0.0
+
+
 def _build_name_index(data_dict):
     """勘定科目名 → dd行番号 のインデックスを構築。同名は最初の出現を使用。"""
     idx = {}
@@ -3609,6 +3890,149 @@ def _build_name_index(data_dict):
         if name and name not in idx:
             idx[name] = rn
     return idx
+
+# ==================================================================
+# 不整合自動検知・修正（validate_and_fix_data）
+# ==================================================================
+def validate_and_fix_data(data_dict, closing_dates):
+    """
+    CF計算前にdata_dictの不整合を検知し、可能な範囲で自動修正する。
+
+    検知・修正項目:
+      [1] B/S借方貸方不一致（資産合計 ≠ 負債・純資産合計）→ アラートのみ
+      [2] P/L当期純利益 ≠ data_dict[154]               → data_dict[154]を自動修正
+      [3] CF照合差 c50 がゼロでない                      → |差|≦5円は端数注記、>5円はアラート
+
+    Returns:
+        alerts: list[str]  警告メッセージ（HTML表示用）
+        fixes:  list[str]  自動修正ログ（HTML表示用）
+    """
+    alerts = []
+    fixes  = []
+    PERIODS = ['前々期', '前期', '今期']
+
+    name_idx = _build_name_index(data_dict)
+
+    def _v(name, period):
+        rn = name_idx.get(name)
+        if rn is None: return None
+        v = data_dict.get(rn, {}).get(period, 0)
+        try: return float(v) if v not in (None, '', '""') else 0.0
+        except: return 0.0
+
+    def _dd(rn, period):
+        v = data_dict.get(rn, {}).get(period, 0)
+        try: return float(v) if v not in (None, '', '""') else 0.0
+        except: return 0.0
+
+    def _ff(key_list, period):
+        return _acct_first(name_idx, data_dict, key_list, period)
+
+    # ──────────────────────────────────────────────────────
+    # [1] B/S借方貸方の不一致
+    # ──────────────────────────────────────────────────────
+    for p in PERIODS:
+        asset      = _ff(_ACCT['現金'], p)  # 資産合計を探す
+        asset_rn   = name_idx.get('資産合計')
+        liab_rn    = name_idx.get('負債・純資産合計（負債・資本合計）') or \
+                     name_idx.get('負債純資産合計') or \
+                     name_idx.get('負債・資本合計')
+        if asset_rn and liab_rn:
+            asset_v = _dd(asset_rn, p)
+            liab_v  = _dd(liab_rn, p)
+            diff = int(asset_v - liab_v)
+            if diff != 0:
+                alerts.append(
+                    f'[B/S不一致][{p}] 資産合計={int(asset_v):,} '
+                    f'vs 負債・純資産合計={int(liab_v):,} → 差={diff:+,}円 '
+                    f'（読取精度の問題の可能性。自動修正不可）'
+                )
+
+    # ──────────────────────────────────────────────────────
+    # [2] P/L当期純利益 ≠ data_dict[154]
+    # ──────────────────────────────────────────────────────
+    pl_names = ['当期純利益', '当期利益', '税引後当期純利益', '当期純損益']
+    for p in PERIODS:
+        pl_val = None
+        pl_name_found = None
+        for nm in pl_names:
+            v = _v(nm, p)
+            if v is not None:
+                pl_val = v; pl_name_found = nm; break
+
+        dd154_val = _dd(154, p)
+
+        if pl_val is not None:
+            diff = int(pl_val - dd154_val)
+            if diff != 0:
+                # 自動修正: data_dict[154] を P/L値で上書き
+                if 154 not in data_dict:
+                    data_dict[154] = {'行番号': 154, '勘定科目': '当期純利益'}
+                data_dict[154][p] = pl_val
+                fixes.append(
+                    f'[P/L修正][{p}] data_dict[154]({p})を '
+                    f'{int(dd154_val):,} → {int(pl_val):,} に修正 '
+                    f'（参照科目: {pl_name_found}）'
+                )
+
+    # ──────────────────────────────────────────────────────
+    # [3] CF照合差（c50）の確認
+    #     ※ calc_cf_from_data_dict を呼んで確認
+    # ──────────────────────────────────────────────────────
+    try:
+        _cf_check = calc_cf_from_data_dict(data_dict, closing_dates)
+        for period_key, cf_dict, label in [
+            ('前期', _cf_check['zenki'], '前期'),
+            ('今期', _cf_check['konki'], '今期'),
+        ]:
+            c50 = cf_dict.get('c50', 0)
+            c48 = cf_dict.get('c48', 0)
+            c49 = cf_dict.get('c49', 0)
+            if c50 == 0:
+                continue
+            elif abs(c50) <= 5:
+                fixes.append(
+                    f'[CF端数][{label}] 照合差={c50:+,}円 '
+                    f'（千円単位の端数誤差。許容範囲内）'
+                )
+            else:
+                # 原因特定: 各セクション合計 vs B/S変動で差異の所在を特定
+                c24 = cf_dict.get('c24', 0)
+                c36 = (cf_dict.get('c28',0)+cf_dict.get('c29',0)+cf_dict.get('c30',0)
+                       +cf_dict.get('c31',0)+cf_dict.get('c34',0)+cf_dict.get('c35',0))
+                c45 = cf_dict.get('c45', 0)
+                alerts.append(
+                    f'[CF不一致][{label}] 照合差={c50:+,}円 '
+                    f'（Ⅵ期末={c48:,} vs B/S現金={c49:,}）'
+                    f' | Ⅰ={c24:,} Ⅱ={c36:,} Ⅲ={c45:,}'
+                )
+    except Exception as _e:
+        alerts.append(f'[CF検証エラー] {_e}')
+
+    return alerts, fixes
+
+
+def format_validation_log(alerts, fixes):
+    """アラート・修正ログをHTML形式で返す"""
+    if not alerts and not fixes:
+        return ''
+    parts = []
+    if fixes:
+        parts.append(
+            '<div style="background:#d4edda;border:1px solid #c3e6cb;'
+            'border-radius:4px;padding:8px 12px;margin:6px 0;font-size:11px;">'
+            '<b>✅ 自動修正（' + str(len(fixes)) + '件）</b><br>'
+            + '<br>'.join(fixes) + '</div>'
+        )
+    if alerts:
+        parts.append(
+            '<div style="background:#fff3cd;border:1px solid #ffc107;'
+            'border-radius:4px;padding:8px 12px;margin:6px 0;font-size:11px;">'
+            '<b>⚠️ 要確認アラート（' + str(len(alerts)) + '件）</b><br>'
+            + '<br>'.join(alerts) + '</div>'
+        )
+    return ''.join(parts)
+
 
 def calc_cf_from_data_dict(data_dict, closing_dates):
     """
@@ -3638,38 +4062,67 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
     period_konki = closing_dates.get('今期', '')
 
     def _calc(p_from, p_to):
-        def v(n):  return _v(n, p_to)
-        def vm(n): return _v(n, p_from)
-        def d(n):  return v(n) - vm(n)
-        def i(x):  return int(x)
+        def v(name):  return _v(name, p_to)
+        def vm(name): return _v(name, p_from)
+        def d(name):  return v(name)-vm(name)
+        def i(x):     return int(x)
 
-        genkin_from = vm('現金及び預金')
-        genkin_to   = v('現金及び預金')
+        # 候補リストから値取得するヘルパー（Python _calc スコープ用）
+        def fa(key_list, period):
+            """候補リストの科目を合算して返す"""
+            return _acct_sum(name_idx, data_dict, key_list, period)
+        def ff(key_list, period):
+            """候補リストで最初に見つかった科目の値を返す"""
+            return _acct_first(name_idx, data_dict, key_list, period)
+        def da(key_list):
+            """候補リストの科目の増減合計を返す（今期-前期）"""
+            return fa(key_list, p_to) - fa(key_list, p_from)
+        def df(key_list):
+            """候補リストの最初の科目の増減を返す（今期-前期）"""
+            return ff(key_list, p_to) - ff(key_list, p_from)
+
+        genkin_from = ff(_ACCT['現金'], p_from)
+        genkin_to   = ff(_ACCT['現金'], p_to)
 
         # ── 営業CF ─────────────────────────────────────
-        c9  = i(_dd(154, p_to))  # 当期純利益（dd154直接参照）
+        c9  = i(_dd(154, p_to))   # 当期純利益（dd154直接参照）
 
         dep161 = _dd(161, p_to)
         if dep161 == 0:
             dep161 = _dd(90,p_to)+_dd(125,p_to)+_dd(126,p_to)
-        c11 = i(dep161)          # 減価償却費
+        c11 = i(dep161)           # 減価償却費
 
-        c12 = i(d('未払金') + d('預り金'))   # 引当金（未払金＋預り金）
-        c14 = i(-d('受取手形'))              # 受取手形
-        c15 = i(-d('売掛金'))               # 売掛金
-        c16 = i(-d('棚卸資産計'))            # 棚卸資産
-        c17 = i(-d('その他流動資産計'))       # その他流動資産（直接参照）
-        c18 = i(d('支払手形'))              # 支払手形
-        c19 = i(d('買掛金'))               # 買掛金
-        c20 = 0                             # 前受金
-        # その他流動負債：流動負債合計から既計上科目を除いた残差
-        c21 = i(d('流動負債合計')
-                - d('買掛金') - d('未払金')
-                - d('未払法人税等') - d('預り金') - d('支払手形'))
-        # その他固定負債：固定負債合計から長期借入金・役員長期借入金を除いた残差
-        c22 = i(d('固定負債合計') - d('長期借入金') - d('役員長期借入金'))
+        # c12: 営業CF性の引当金・未払項目（候補リストを全て合算）
+        c12 = i(da(_ACCT['引当金_リスト']))
+
+        c14 = i(-d('受取手形'))
+        c15 = i(-d('売掛金'))
+        c16 = i(-df(_ACCT['棚卸資産']))       # 棚卸資産（候補リスト）
+        c17 = i(-df(_ACCT['その他流動資産'])) # その他流動資産（候補リスト）
+        c18 = i(d('支払手形'))
+        c19 = i(d('買掛金'))
+        c20 = 0
+        c20b = i(df(_ACCT['未払法人税']))     # 未払法人税等（候補リスト）
+
+        # c21: その他流動負債（流動負債合計 - 既計上科目の残差）
+        # c12計上科目・c19・c20b・未払金・支払手形を除いた残差
+        c21_deduct = (
+            d('買掛金')
+            + d('未払金')
+            + df(_ACCT['未払法人税'])
+            + da(_ACCT['引当金_リスト'])  # c12と同じ科目群を控除
+            + d('支払手形')
+        )
+        c21 = i(d('流動負債合計') - c21_deduct)
+
+        # c22: その他固定負債（固定負債合計 - 長期借入金 - 役員長期借入金 の残差）
+        c22 = i(
+            d('固定負債合計')
+            - d('長期借入金')
+            - df(_ACCT['役員借入金'])   # 役員長期借入金（候補リスト）
+        )
         c23 = 0
-        c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c21+c22+c23
+        c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c20b+c21+c22+c23
 
         # ── 投資CF ─────────────────────────────────────
         c28 = i(-d('土地'))
@@ -3678,33 +4131,32 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         c29 = i(-((hyt_to - hyt_from) + c11))
         c30 = i(-d('建設仮勘定'))
         c31 = i(-d('無形固定資産'))
-        c34 = i(-d('投資その他の資産合計'))
+        c34 = i(-df(_ACCT['投資その他資産']))  # 投資その他資産（候補リスト）
         c35 = i(-d('繰延資産'))
         c36 = c28+c29+c30+c31+c34+c35
         c37 = c24+c36
 
         # ── 財務CF ─────────────────────────────────────
-        c39 = i(d('短期借入金'))      if '短期借入金'    in name_idx else 0
+        c39 = i(d('短期借入金')) if '短期借入金' in name_idx else 0
+        c39 += i(d('未払金'))   # 未払金は財務CF
         c40 = i(d('長期借入金'))
-        c41 = i(d('役員長期借入金'))
-        c42 = i(d('資本金') + d('資本剰余金'))
-        c43 = i(d('自己株式'))        if '自己株式'      in name_idx else 0
+        c41 = i(df(_ACCT['役員借入金']))  # 役員長期借入金（候補リスト）
+        c42 = i(d('資本金') + df(_ACCT['資本剰余金']))  # 資本剰余金（候補リスト）
+        c43 = i(d('自己株式')) if '自己株式' in name_idx else 0
 
-
-        # 配当金＋役員賞与（繰越利益剰余金ベース自動計算）
-        # 勘定科目名の表記ゆれに対応（優先順位順に検索）
+        # c44: 配当金＋役員賞与（繰越利益剰余金ベース自動計算）
         _rieki_candidates = [
-            'うち繰越利益剰余金',         # 石坂様Excelテンプレート形式
-            '繰越利益剰余金',             # シンプル表記
-            '繰越利益剰余金・前期末残高',  # Analygent読取形式
-            '利益剰余金合計',             # フォールバック
+            'うち繰越利益剰余金',
+            '繰越利益剰余金',
+            '繰越利益剰余金・前期末残高',
+            '利益剰余金合計',
         ]
         rieki_rn = next((name_idx[k] for k in _rieki_candidates if k in name_idx), None)
         rieki70_diff = (_dd(rieki_rn, p_to) - _dd(rieki_rn, p_from)) if rieki_rn else 0
         c44 = -i(_dd(154, p_to) - rieki70_diff)
 
         c45 = c39+c40+c41+c42+c43+c44
-        c46 = c37+c45
+        c46 = c24+c36+c45
         c47 = i(genkin_from)
         c48 = i(c46+c47)
         c49 = i(genkin_to)
@@ -3712,7 +4164,7 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
 
         return dict(
             c9=c9, c11=c11, c12=c12, c14=c14, c15=c15, c16=c16, c17=c17,
-            c18=c18, c19=c19, c20=c20, c21=c21, c22=c22, c23=c23, c24=c24,
+            c18=c18, c19=c19, c20=c20, c20b=c20b, c21=c21, c22=c22, c23=c23, c24=c24,
             c28=c28, c29=c29, c30=c30, c31=c31, c34=c34, c35=c35,
             c39=c39, c40=c40, c41=c41, c42=c42, c43=c43, c44=c44,
             c45=c45, c46=c46, c47=c47, c48=c48, c49=c49, c50=c50,
@@ -3734,10 +4186,11 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         ('　　　４．その他の流動資産の増加（－）・減少（＋）額',     2,'c17','c17'),
         ('　　　５．支払手形の増加（＋）・減少（－）額',             2,'c18','c18'),
         ('　　　６．買掛金の増加（＋）・減少（－）額',              2,'c19','c19'),
-        ('　　　７．前受金の増加（＋）・減少（－）額',              2,'c20','c20'),
-        ('　　　８．その他の流動負債の増加（＋）・減少（－）額',     2,'c21','c21'),
-        ('　　　９．その他の固定負債の増加（＋）・減少（－）額',     2,'c22','c22'),
-        ('　　１０．利益処分による役員賞与の支払（－）額',           2,'c23','c23'),
+        ('　　　７．前受金の増加（＋）・減少（－）額',              2,'c20', 'c20'),
+        ('　　　８．未払法人税等の増加（＋）・減少（－）額',         2,'c20b','c20b'),
+        ('　　　９．その他の流動負債の増加（＋）・減少（－）額',     2,'c21', 'c21'),
+        ('　　１０．その他の固定負債の増加（＋）・減少（－）額',     2,'c22', 'c22'),
+        ('　　１１．利益処分による役員賞与の支払（－）額',           2,'c23', 'c23'),
         ('（Ⅰの計）',                                            3, None,  None),
         ('Ⅱ　投資活動によるキャッシュ・フロー',                    0, None,  None),
         ('　　　１．有価証券の増加（－）・減少（＋）額',             2, None,  None),
@@ -3765,6 +4218,8 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         ('Ⅵ　期末現金及び預金残高',                               2,'c48','c48'),
         ('検算（貸借対照表の現金及び預金）',                        99,'c49','c49'),
         ('（照合）この欄が０でＯＫ',                               99,'c50','c50'),
+        ('※千円単位の場合、千円未満の集計による端数が差異として発生する場合があります',
+                                                                  98, None, None),
     ]
 
     def make_row(label, lv, zk, kk):
@@ -3775,7 +4230,7 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         elif 'フリー' in label:              z_val=zenki['c24']+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']; k_val=konki['c24']+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']
         elif label == '（Ⅲの計）':          z_val=zenki['c45']; k_val=konki['c45']
         elif 'Ⅳ' in label:                 z_val=zenki['c24']+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']+zenki['c45']; k_val=konki['c24']+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']+konki['c45']
-        return {'label':label,'lv':lv,'zenki':z_val,'konki':k_val,'zk':zk,'kk':kk}
+        return {'label':label,'lv':lv,'level':lv,'zenki':z_val,'konki':k_val,'zk':zk,'kk':kk}
 
     rows = [make_row(l,lv,zk,kk) for l,lv,zk,kk in CF_ROWS]
 
@@ -3793,7 +4248,7 @@ def generate_cf_html(cf_data):
     rows=cf_data['rows']
     COLOR={0:('#1B4F72','#ffffff'),1:('#2E86C1','#ffffff'),
            2:('#ffffff','#333333'),3:('#d9ead3','#333333'),
-           99:('#fff9c4','#555555')}
+           99:('#fff9c4','#555555'),98:('#ffffff','#888888')}
     def _fmt(v): return f'{v:,}' if v is not None else '0'
 
     def _tbl(title, period_label, val_key):
@@ -3811,7 +4266,9 @@ def generate_cf_html(cf_data):
             ns=f'background-color:{bg};color:{fg};{bold}text-align:right;font-family:Consolas,monospace;padding:4px 8px;border:1px solid #ccc;font-size:12px;'
             cf_key = row.get('cf_key','')
             key_attr = f' data-cf-key="{cf_key}"' if cf_key else ''
-            if lv in(0,1) and val is None:
+            if lv == 98:  # 注記行：colspan=2・値なし
+                tbody.append(f'<tr><td colspan="2" style="{bs}font-style:italic;">{label}</td></tr>')
+            elif lv in(0,1) and val is None:
                 tbody.append(f'<tr{key_attr}><td colspan="2" style="{bs}">{label}</td></tr>')
             else:
                 tbody.append(f'<tr{key_attr}><td style="{bs}">{label}</td><td style="{ns}">{_fmt(val)}</td></tr>')
@@ -4031,9 +4488,15 @@ def generate_keiei_shihyo_html(data_dict, closing_dates):
 # CF計算書 生成 & 最終HTML表示（1回のみ）
 # ------------------------------------------------------------------
 try:
+    # 不整合自動検知・修正
+    _alerts, _fixes = validate_and_fix_data(data_dict, closing_dates)
+    _validation_html = format_validation_log(_alerts, _fixes)
+    if _fixes:  print("[自動修正]", " / ".join(_fixes))
+    if _alerts: print("[アラート]", " / ".join(_alerts))
+
     _cf_data = calc_cf_from_data_dict(data_dict, closing_dates)
     _keiei_html = generate_keiei_shihyo_html(data_dict, closing_dates)
-    full_html = full_html + generate_cf_html(_cf_data) + create_table_rows([(157, 159)], "入力項目／集計項目") + _keiei_html
+    full_html = full_html + _validation_html + generate_cf_html(_cf_data) + create_table_rows([(157, 159)], "入力項目／集計項目") + _keiei_html
     print(f"✅ CF計算書HTML生成完了: 前期={_cf_data['period_zenki']}, 今期={_cf_data['period_konki']}")
 except Exception as _e:
     import traceback
