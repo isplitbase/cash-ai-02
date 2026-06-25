@@ -2913,19 +2913,24 @@ window._rebuildCFTable = function(){
 
     // ── 候補リスト（Python _ACCT に対応） ──────────────────────
     var _ACCT_JS = {
-      現金: ["現金及び預金","現金預金","現預金","現金及び預貯金"],
+      現金: ["現金及び預金","現金・預金","現金預金","現預金","現金及び預貯金"],
       棚卸資産: ["棚卸資産計","棚卸資産","在庫","棚卸高","棚卸資産合計"],
       その他流動資産: ["その他流動資産計","その他の流動資産計","その他流動資産",
                       "その他の流動資産","その他流動資産合計"],
       未払法人税: ["未払法人税等","未払法人税","法人税等未払金",
                   "未払法人税・住民税及び事業税","未払税金"],
+      未払消費税: ["未払消費税等","未払消費税","仮受消費税"],
       投資その他資産: ["投資その他の資産合計","投資その他資産合計","投資等合計",
                       "投資その他の資産","投資及びその他の資産合計"],
       役員借入金: ["役員長期借入金","役員借入金","関係者長期借入金",
                   "役員等長期借入金","関連当事者借入金"],
       資本剰余金: ["資本剰余金","資本準備金","その他資本剰余金","資本剰余金合計"],
-      引当金_リスト: ["賞与引当金","役員賞与引当金","退職給付引当金","退職給付に係る負債",
-                     "貸倒引当金","未払費用","仮受金","前受収益","預り金"],
+      有価証券: ["有価証券","投資有価証券"],
+      短期貸付金: ["短期貸付金"],
+      前受金: ["前受金","未成工事受入金","前受収益"],
+      引当金_リスト: ["賞与引当金","役員賞与引当金","退職給付引当金","退職給与引当金",
+                     "退職給付に係る負債","製品保証引当金","貸倒引当金",
+                     "未払費用","仮受金","前受収益","預り金"],
     };
 
     // 候補リストを合算（存在する科目だけ足す）
@@ -3022,8 +3027,29 @@ window._rebuildCFTable = function(){
       if (dep161 === 0) dep161 = rdd(90,p_to)+rdd(125,p_to)+rdd(126,p_to);
       var c11 = Math.round(dep161);
 
-      // c12: 引当金候補リストを全て合算
-      var c12 = Math.round(fa(_ACCT_JS.引当金_リスト));
+      // c12: 営業CF性の引当金（候補リスト＋分類「引当金」全捕捉）
+      var _c12counted = {};
+      var _c12to = 0, _c12from = 0;
+      _ACCT_JS.引当金_リスト.forEach(function(nm){
+        if (nameIdx[nm] && !_c12counted[nm]) {
+          _c12counted[nm] = 1;
+          _c12to += vn(nm, p_to); _c12from += vn(nm, p_from);
+        }
+      });
+      // 分類に「引当金」を含む科目を追加捕捉
+      for (var _i=0; _i<_data.length; _i++) {
+        var _r = _data[_i];
+        var _nm = (_r["勘定科目"]||"").trim();
+        var _sc = (_r["分類"]||_r["section"]||"").trim();
+        if (!_nm || _c12counted[_nm]) continue;
+        if (_sc.indexOf("引当金") >= 0) {
+          _c12counted[_nm] = 1;
+          var _vt = _r[p_to], _vf = _r[p_from];
+          _c12to   += (_vt==null||_vt==="")?0:(parseFloat(_vt)||0);
+          _c12from += (_vf==null||_vf==="")?0:(parseFloat(_vf)||0);
+        }
+      }
+      var c12 = Math.round(_c12to - _c12from);
 
       var c14 = Math.round(-d("受取手形"));
       var c15 = Math.round(-d("売掛金"));
@@ -3033,42 +3059,71 @@ window._rebuildCFTable = function(){
       _ACCT_JS.現金.forEach(function(n){ _c17excl[n]=1; });
       _c17excl["受取手形"]=1; _c17excl["売掛金"]=1;
       _ACCT_JS.棚卸資産.forEach(function(n){ _c17excl[n]=1; });
-      var c17 = Math.round(-dsec(_ACCT_JS.その他流動資産, ["流動資産"], _c17excl));
+      _ACCT_JS.有価証券.forEach(function(n){ _c17excl[n]=1; });
+      _ACCT_JS.短期貸付金.forEach(function(n){ _c17excl[n]=1; });
+      var _c17raw = dsec(_ACCT_JS.その他流動資産, ["流動資産"], _c17excl);
+      // 集計行使用時、小計に短期貸付金が含まれていれば控除
+      var _aggHitC17 = _ACCT_JS.その他流動資産.some(function(nm){ return nm in nameIdx; });
+      if (_aggHitC17 && ("短期貸付金" in nameIdx)) {
+        var _stlSec = ((nameIdx["短期貸付金"]||{})["分類"]||"").trim();
+        if (_stlSec.indexOf("流動資産") >= 0) _c17raw -= fa(_ACCT_JS.短期貸付金);
+      }
+      var c17 = Math.round(-_c17raw);
       var c18 = Math.round(d("支払手形"));
       var c19 = Math.round(d("買掛金"));
-      var c20 = 0;
+      // c20 前受金（未成工事受入金等）
+      var c20 = Math.round(fa(_ACCT_JS.前受金));
       var c20b = Math.round(ff(_ACCT_JS.未払法人税));
 
-      // c21: 流動負債合計（集計行）優先、なければ流動負債分類合算 - 既計上科目
+      // 引当金リストのうち指定分類に属する科目の増減
+      function _hikiateInSection(secNames, pk) {
+        var total = 0;
+        _ACCT_JS.引当金_リスト.forEach(function(nm){
+          var r = nameIdx[nm];
+          if (!r) return;
+          var sec = (r["分類"]||"").trim();
+          var hit = secNames.some(function(s){ return sec===s || sec.indexOf(s)>=0; });
+          if (hit) { var vv=r[pk]; total += (vv==null||vv==="")?0:(parseFloat(vv)||0); }
+        });
+        return total;
+      }
+
+      // c21: 流動負債合計（集計行）優先、なければ分類合算 - 既計上科目
       function _ryudoFusai(pk) {
         if ("流動負債合計" in nameIdx) return acctFirst(nameIdx, ["流動負債合計"], pk);
         return sectionSum(_data, ["流動負債"], pk, {});
       }
       var _ryudoDiff = _ryudoFusai(p_to) - _ryudoFusai(p_from);
+      var _tankiDiff = ("短期借入金" in nameIdx) ? d("短期借入金") : 0;
+      var _hikiateRyudo = _hikiateInSection(["流動負債"], p_to) - _hikiateInSection(["流動負債"], p_from);
       var c21 = Math.round(
         _ryudoDiff
-        - d("買掛金") - d("未払金")
+        - d("買掛金") - d("未払金") - _tankiDiff
         - ff(_ACCT_JS.未払法人税)
-        - fa(_ACCT_JS.引当金_リスト)
+        - fa(_ACCT_JS.前受金)
+        - _hikiateRyudo
         - d("支払手形")
       );
 
-      // c22: 固定負債合計（集計行）優先、なければ固定負債分類合算 - 長期借入金 - 役員長期借入金
+      // c22: 固定負債合計（集計行）優先、なければ分類合算 - 長期借入金 - 役員借入金 - 引当金
       function _koteiFusai(pk) {
         if ("固定負債合計" in nameIdx) return acctFirst(nameIdx, ["固定負債合計"], pk);
         return sectionSum(_data, ["固定負債"], pk, {});
       }
       var _koteiDiff = _koteiFusai(p_to) - _koteiFusai(p_from);
+      var _hikiateKotei = _hikiateInSection(["固定負債"], p_to) - _hikiateInSection(["固定負債"], p_from);
       var c22 = Math.round(
-        _koteiDiff - d("長期借入金") - ff(_ACCT_JS.役員借入金)
+        _koteiDiff - d("長期借入金") - ff(_ACCT_JS.役員借入金) - _hikiateKotei
       );
 
       var c23 = 0;
       var c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c20b+c21+c22+c23;
 
       // ── 投資CF ────────────────────────────────────────────────
+      var c26 = Math.round(-fa(_ACCT_JS.有価証券));   // 有価証券
+      var c27 = Math.round(-fa(_ACCT_JS.短期貸付金)); // 短期貸付金
       var c28 = Math.round(-d("土地"));
-      // c29: 有形固定資産合計（集計行）優先、なければ有形固定資産分類合算（土地・建設仮勘定除く）
+      // c29: 有形固定資産合計（集計行）優先、なければ分類合算（土地・建設仮勘定除く）
       function _hyt(pk) {
         if ("有形固定資産合計" in nameIdx) {
           return acctFirst(nameIdx, ["有形固定資産合計"], pk)
@@ -3084,7 +3139,7 @@ window._rebuildCFTable = function(){
       var c31 = Math.round(-d("無形固定資産"));
       var c34 = Math.round(-dsec(_ACCT_JS.投資その他資産, ["投資その他の資産"]));
       var c35 = Math.round(-d("繰延資産"));
-      var c36 = c28+c29+c30+c31+c34+c35;
+      var c36 = c26+c27+c28+c29+c30+c31+c34+c35;
       var c37 = c24+c36;
 
       // ── 財務CF ────────────────────────────────────────────────
@@ -3129,6 +3184,7 @@ window._rebuildCFTable = function(){
       c16=_add(c16,'c16'); c17=_add(c17,'c17'); c18=_add(c18,'c18');
       c19=_add(c19,'c19'); c20=_add(c20,'c20'); c20b=_add(c20b,'c20b');
       c21=_add(c21,'c21'); c22=_add(c22,'c22');
+      c26=_add(c26,'c26'); c27=_add(c27,'c27');
       c28=_add(c28,'c28'); c29=_add(c29,'c29'); c30=_add(c30,'c30');
       c31=_add(c31,'c31'); c34=_add(c34,'c34'); c35=_add(c35,'c35');
       c39=_add(c39,'c39'); c40=_add(c40,'c40'); c41=_add(c41,'c41');
@@ -3136,7 +3192,7 @@ window._rebuildCFTable = function(){
 
       // 集計を再計算（ユーザー割当て反映後）
       c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c20b+c21+c22+c23;
-      c36 = c28+c29+c30+c31+c34+c35;
+      c36 = c26+c27+c28+c29+c30+c31+c34+c35;
       c37 = c24+c36;
       var c45 = c39+c40+c41+c42+c43+c44;
       var c46 = c24+c36+c45;
@@ -3147,7 +3203,7 @@ window._rebuildCFTable = function(){
       if (c50 !== 0 && Math.abs(c50) < 1000) { c48 = c49; c50 = 0; }
 
       return {c9,c11,c12,c14,c15,c16,c17,c18,c19,c20,c20b,c21,c22,c23,c24,
-              c28,c29,c30,c31,c34,c35,c36,c37,
+              c26,c27,c28,c29,c30,c31,c34,c35,c36,c37,
               c39,c40,c41,c42,c43,c44,c45,c46,c47,c48,c49,c50};
     }
 
@@ -3812,7 +3868,7 @@ def _write_cf_sheet(wb, cf_data, closing_dates):
         else:
             sw(r, c, int(val), bg=bg, fg=fg, bold=bold, ha="right", fmt=NUM_FMT)
 
-    def ii(d):   return d["c28"]+d["c29"]+d["c30"]+d["c31"]+d["c34"]+d["c35"]
+    def ii(d):   return d.get("c26",0)+d.get("c27",0)+d["c28"]+d["c29"]+d["c30"]+d["c31"]+d["c34"]+d["c35"]
     def fcf(d):  return d["c24"]+ii(d)
     def iv(d):   return d["c24"]+ii(d)+d["c45"]
 
@@ -3866,8 +3922,8 @@ def _write_cf_sheet(wb, cf_data, closing_dates):
         ("　　１１．利益処分による役員賞与の支払（－）額",     2,"c23",  "c23"),
         ("（Ⅰの計）",                                                 3,"c24",  "c24"),
         ("Ⅱ　投資活動によるキャッシュ・フロー",                   0, None,   None),
-        ("　　　１．有価証券の増加（－）・減少（＋）額",   2, None,   None),
-        ("　　　２．短期貸付金の増加（－）・減少（＋）額", 2, None,   None),
+        ("　　　１．有価証券の増加（－）・減少（＋）額",   2, "c26",  "c26"),
+        ("　　　２．短期貸付金の増加（－）・減少（＋）額", 2, "c27",  "c27"),
         ("　　　３．土地の増加（－）・減少（＋）額",       2,"c28",  "c28"),
         ("　　　４．減価償却資産の増加（－）・減少（＋）額",2,"c29", "c29"),
         ("　　　５．建設仮勘定の増加（－）・減少（＋）額", 2,"c30",  "c30"),
@@ -4038,7 +4094,7 @@ _FS_TO_DD = {
 _ACCT = {
     # 期首・期末現金
     '現金': [
-        '現金及び預金', '現金預金', '現預金', '現金及び預貯金',
+        '現金及び預金', '現金・預金', '現金預金', '現預金', '現金及び預貯金',
     ],
     # 棚卸資産
     '棚卸資産': [
@@ -4053,6 +4109,10 @@ _ACCT = {
     '未払法人税': [
         '未払法人税等', '未払法人税', '法人税等未払金',
         '未払法人税・住民税及び事業税', '未払税金',
+    ],
+    # 未払消費税（営業CF・その他流動負債側で扱う）
+    '未払消費税': [
+        '未払消費税等', '未払消費税', '仮受消費税',
     ],
     # 投資その他の資産合計
     '投資その他資産': [
@@ -4070,8 +4130,21 @@ _ACCT = {
     ],
     # c12 引当金・営業CF性流動負債（複数存在すれば合算）
     '引当金_リスト': [
-        '賞与引当金', '役員賞与引当金', '退職給付引当金', '退職給付に係る負債',
-        '貸倒引当金', '未払費用', '仮受金', '前受収益', '預り金',
+        '賞与引当金', '役員賞与引当金', '退職給付引当金', '退職給与引当金',
+        '退職給付に係る負債', '製品保証引当金', '貸倒引当金',
+        '未払費用', '仮受金', '前受収益', '預り金',
+    ],
+    # c26 有価証券
+    '有価証券': [
+        '有価証券', '投資有価証券',
+    ],
+    # c27 短期貸付金
+    '短期貸付金': [
+        '短期貸付金',
+    ],
+    # c20 前受金（建設業の未成工事受入金等）
+    '前受金': [
+        '前受金', '未成工事受入金', '前受収益',
     ],
     # c20b 未払法人税等（上記'未払法人税'と同一リスト）
     # c21控除用（流動負債合計から除くもの）
@@ -4147,6 +4220,41 @@ def _section_sum(name_idx, data_dict, section_names, period, exclude_names=None)
         except:
             pass
     return total
+
+def _find_cash_row(name_idx, data_dict):
+    """
+    現金科目の行番号を堅牢に特定する。
+    1. 候補リスト完全一致を優先
+    2. なければ「現金」を含む流動資産科目（集計行除く）の最上位
+    Returns: 行番号 or None
+    """
+    # 1. 候補リスト完全一致
+    for nm in _ACCT['現金']:
+        if nm in name_idx:
+            return name_idx[nm]
+    # 2. 部分一致：「現金」を含む流動資産科目（集計行・見出し除く）
+    for rn in sorted(data_dict.keys()):
+        row = data_dict[rn]
+        name = str(row.get('勘定科目') or '').strip()
+        sec  = str(row.get('分類') or row.get('section') or '').strip()
+        if not name:
+            continue
+        if '現金' not in name:
+            continue
+        # 集計行・見出し除外
+        if _is_aggregate_name(name):
+            continue
+        # 流動資産系の分類に限定
+        if sec and ('流動資産' in sec or '当座' in sec or sec == ''):
+            return rn
+    # 3. それでもなければ「預金」を含む科目
+    for rn in sorted(data_dict.keys()):
+        row = data_dict[rn]
+        name = str(row.get('勘定科目') or '').strip()
+        if name and '預金' in name and not _is_aggregate_name(name):
+            return rn
+    return None
+
 
 def _agg_or_section(name_idx, data_dict, agg_candidates, section_names,
                     period, exclude_names=None):
@@ -4249,43 +4357,81 @@ _VALID_UNUSED_PATTERNS = [
     '前期末残高', '当期変動額', '当期純利益', '当期利益',
 ]
 
-def detect_unassigned_accounts(data_dict):
+def detect_unassigned_accounts(data_dict, used_names=None):
     """
-    CF計算で使われなかった勘定科目を検出し、
-    「妥当な未使用」と「要確認（辞書漏れの可能性）」に分類する。
+    CF計算で実際に使われた勘定科目（used_names）を実測ベースで受け取り、
+    使われなかった科目のうち「要確認（辞書漏れの可能性）」を抽出する。
 
-    重要：CF計算は「集計行」を参照する箇所がある（棚卸資産計・有形固定資産合計等）。
-    集計行に内包される明細科目は集計行経由で反映済みのため除外する。
+    used_names: calc_cf_from_data_dict()の戻り値の 'used_names'（実際に値を
+                参照・加算した勘定科目名のセット）。Noneの場合は内部で計算する。
+
+    判定方針（実測ベース）:
+      - used_names に含まれる科目 → 実際にCF計算で使用済み（妥当）
+      - 集計行・見出し行（合計/計/部/区分、分類名と同名）→ 妥当な未使用
+      - 純資産・P/Lの内訳明細 → 当期純利益・資本等に内包済み（妥当）
+      - 金額ゼロ → 計上不要（妥当）
+      - 上記いずれにも該当せず金額が非ゼロ → 真の要確認（辞書漏れの可能性）
 
     Returns:
         list[dict]: 要確認科目のリスト
     """
-    referenced = _all_cf_referenced_names()
+    # used_names が渡されなければ内部でCF計算して取得
+    if used_names is None:
+        try:
+            _cf = calc_cf_from_data_dict(data_dict,
+                    {'前々期':'前々期','前期':'前期','今期':'今期'})
+            used_names = _cf.get('used_names', set())
+        except Exception:
+            used_names = set()
+    used_names = set(used_names or set())
+
+    # 集計行が used に含まれる場合、その集計行が代表する分類の明細は
+    # 集計行経由で反映済みとみなす（二重計上防止と同じ考え方）
+    # 集計行名 → 代表する分類のマッピング
+    _AGG_TO_SECTION = {
+        '棚卸資産計': ['流動資産'], '棚卸資産合計': ['流動資産'], '棚卸資産': ['流動資産'],
+        'その他流動資産計': ['流動資産'], 'その他の流動資産計': ['流動資産'],
+        'その他流動資産合計': ['流動資産'], 'その他流動資産': ['流動資産'],
+        '当座資産': ['流動資産'], '当座資産計': ['流動資産'],
+        '有形固定資産合計': ['有形固定資産'], '有形固定資産': ['有形固定資産'],
+        '無形固定資産合計': ['無形固定資産'], '無形固定資産': ['無形固定資産'],
+        '投資その他の資産合計': ['投資その他の資産'],
+        '投資その他資産合計': ['投資その他の資産'],
+        '投資その他の資産': ['投資その他の資産'],
+        '流動負債合計': ['流動負債'], '流動負債': ['流動負債'],
+        '固定負債合計': ['固定負債'], '固定負債': ['固定負債'],
+    }
+    # used に含まれる集計行が代表する分類を集める
+    _covered_by_agg = set()
+    for agg_name in used_names:
+        if agg_name in _AGG_TO_SECTION:
+            for sec in _AGG_TO_SECTION[agg_name]:
+                _covered_by_agg.add(sec)
 
     def _num(row, key):
         v = row.get(key, 0)
         try: return float(v) if v not in (None, '', '""') else 0.0
         except: return 0.0
 
-    # CF計算が「集計行」で参照している分類
-    # → これらの分類の明細科目は集計行経由で反映済み（妥当な未使用）
-    # 分類名（JSONの「分類」フィールド）→ 集計行経由で反映済みか
-    _AGGREGATED_SECTIONS = {
-        '流動資産',          # 棚卸資産計・その他流動資産計に集約（個別は現金/受取手形/売掛金のみ参照）
-        '有形固定資産',      # 有形固定資産合計に集約（個別は土地・建設仮勘定のみ参照）
-        '投資その他の資産',  # 投資その他の資産合計に集約
-        '流動負債',          # 流動負債合計に集約（個別は買掛金/未払金/支払手形等のみ参照）
-        '固定負債',          # 固定負債合計に集約（個別は長期借入金/役員長期借入金のみ参照）
-        '純資産', '株主資本',# 当期純利益・資本金・剰余金で集約
-        # P/L明細は当期純利益(c9)に集約
-        '売上原価', '売上高', '販売費', '一般管理費', '製造原価',
-        '営業外収益', '営業外費用', '特別利益', '特別損失',
+    # 当期純利益(c9)・資本等に内包されるため個別計上不要な分類
+    _COVERED_SECTIONS = {
+        '純資産', '純資産合計', '株主資本', '利益剰余金', '繰越利益剰余金',
+        '評価・換算差額等', '新株予約権', '資本金', '資本剰余金', '自己株式',
+        '売上高', '売上原価', '販売費', '販売費及び一般管理費', '一般管理費',
+        '製造原価', '営業外収益', '営業外費用', '特別利益', '特別損失',
+        '法人税等', '資産合計', '負債合計', '負債純資産合計',
     }
 
-    # CF計算で個別参照される科目（集計行があっても個別に使う）
-    # → これらは「集計行に内包されるが個別参照される」ため、
-    #   未使用検出では referenced に含まれるので自動的に除外される
-    # （_all_cf_referenced_names が拾う）
+    def _is_heading_or_total(name, section):
+        if any(pat in name for pat in _VALID_UNUSED_PATTERNS):
+            return True
+        # 分類名と科目名が同じ → 見出し行
+        if section and name == section:
+            return True
+        # 括弧囲みの内訳表示（例：（利益準備金））
+        if name.startswith('（') and name.endswith('）'):
+            return True
+        return False
 
     candidates = []
     for rn in sorted(data_dict.keys()):
@@ -4294,8 +4440,10 @@ def detect_unassigned_accounts(data_dict):
         if not name:
             continue
 
-        # [除外1] 既にCF計算で参照される科目
-        if name in referenced:
+        section = str(row.get('分類') or row.get('section') or '').strip()
+
+        # [除外1] CF計算で実際に使用された科目（実測）
+        if name in used_names:
             continue
 
         # [除外2] 金額が前期・今期ともゼロ
@@ -4304,13 +4452,18 @@ def detect_unassigned_accounts(data_dict):
         if v_zen == 0 and v_kon == 0:
             continue
 
-        # [除外3] 合計・見出し・集計行
-        if any(pat in name for pat in _VALID_UNUSED_PATTERNS):
+        # [除外3] 見出し行・集計行
+        if _is_heading_or_total(name, section):
             continue
 
-        # [除外4] 集計行経由で反映済みの分類に属する明細科目
-        section = str(row.get('分類') or row.get('section') or '').strip()
-        if section in _AGGREGATED_SECTIONS:
+        # [除外4] 当期純利益・資本等に内包される分類
+        if section in _COVERED_SECTIONS:
+            continue
+
+        # [除外5] 集計行が使われた分類の明細（集計行経由で反映済み）
+        # ただし個別参照される主要科目（現金・受取手形・売掛金・土地・建設仮勘定・
+        # 買掛金・未払金・支払手形・長期借入金等）は used に入るので既に除外済み
+        if section in _covered_by_agg:
             continue
 
         # ここまで残ったもの = 真に要確認（辞書漏れの可能性が高い）
@@ -4320,7 +4473,7 @@ def detect_unassigned_accounts(data_dict):
             '分類': section,
             '前期': int(v_zen),
             '今期': int(v_kon),
-            'reason': '辞書（候補リスト）に未登録、かつ集計行にも内包されないCF対象候補',
+            'reason': 'CF計算で未使用、かつ集計行・内包科目でないCF対象候補（辞書漏れの可能性）',
         })
 
     return candidates
@@ -4476,10 +4629,18 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
     """
     name_idx = _build_name_index(data_dict)
 
+    # CF計算で実際に使用した勘定科目名を記録（承認UIの実測判定用）
+    _used_names = set()
+
+    def _mark_used(name):
+        if name:
+            _used_names.add(name)
+
     def _v(name, period):
         rn = name_idx.get(name)
         if rn is None:
             return 0.0
+        _mark_used(name)  # 使用記録
         v = data_dict.get(rn, {}).get(period, 0)
         try:
             return float(v) if v not in (None, '', '""') else 0.0
@@ -4504,10 +4665,15 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
 
         # 候補リストから値取得するヘルパー（Python _calc スコープ用）
         def fa(key_list, period):
-            """候補リストの科目を合算して返す"""
+            """候補リストの科目を合算して返す（使用科目を記録）"""
+            for nm in key_list:
+                if nm in name_idx: _mark_used(nm)
             return _acct_sum(name_idx, data_dict, key_list, period)
         def ff(key_list, period):
-            """候補リストで最初に見つかった科目の値を返す"""
+            """候補リストで最初に見つかった科目の値を返す（使用科目を記録）"""
+            for nm in key_list:
+                if nm in name_idx:
+                    _mark_used(nm); break
             return _acct_first(name_idx, data_dict, key_list, period)
         def da(key_list):
             """候補リストの科目の増減合計を返す（今期-前期）"""
@@ -4515,23 +4681,70 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         def df(key_list):
             """候補リストの最初の科目の増減を返す（今期-前期）"""
             return ff(key_list, p_to) - ff(key_list, p_from)
+        def _section_sum_tracked(section_names, period, exclude_names=None):
+            """分類合算しつつ、加算した明細科目をused記録する"""
+            if exclude_names is None:
+                exclude_names = set()
+            total = 0.0
+            for rn in sorted(data_dict.keys()):
+                row = data_dict[rn]
+                nm  = str(row.get('勘定科目') or '').strip()
+                sc  = str(row.get('分類') or row.get('section') or '').strip()
+                if not nm: continue
+                if sc not in section_names: continue
+                if _is_aggregate_name(nm): continue
+                if nm in section_names: continue
+                if nm in exclude_names: continue
+                vv = row.get(period, 0)
+                try:
+                    val = float(vv) if vv not in (None, '', '""') else 0.0
+                except:
+                    val = 0.0
+                if val != 0:
+                    _mark_used(nm)  # 実際に加算した明細を記録
+                total += val
+            return total
         def dsec(agg_candidates, section_names, exclude_names=None):
             """集計行優先・なければ分類合算 の増減（今期-前期）"""
-            to   = _agg_or_section(name_idx, data_dict, agg_candidates,
-                                   section_names, p_to, exclude_names)
-            frm  = _agg_or_section(name_idx, data_dict, agg_candidates,
-                                   section_names, p_from, exclude_names)
+            # 集計行が存在すればそれを使う（used記録）
+            agg_hit = None
+            for nm in agg_candidates:
+                if nm in name_idx:
+                    agg_hit = nm; break
+            if agg_hit:
+                _mark_used(agg_hit)
+                to  = _acct_first(name_idx, data_dict, [agg_hit], p_to)
+                frm = _acct_first(name_idx, data_dict, [agg_hit], p_from)
+                return to - frm
+            # なければ分類合算（明細をused記録）
+            to  = _section_sum_tracked(section_names, p_to, exclude_names)
+            frm = _section_sum_tracked(section_names, p_from, exclude_names)
             return to - frm
         def ssec(section_names, exclude_names=None):
-            """分類合算のみの増減（今期-前期）"""
-            to  = _section_sum(name_idx, data_dict, section_names, p_to, exclude_names)
-            frm = _section_sum(name_idx, data_dict, section_names, p_from, exclude_names)
+            """分類合算のみの増減（今期-前期、明細をused記録）"""
+            to  = _section_sum_tracked(section_names, p_to, exclude_names)
+            frm = _section_sum_tracked(section_names, p_from, exclude_names)
             return to - frm
 
-        genkin_from = ff(_ACCT['現金'], p_from)
-        genkin_to   = ff(_ACCT['現金'], p_to)
+        # 現金科目の堅牢な特定（表記ゆれ対応）
+        _cash_rn = _find_cash_row(name_idx, data_dict)
+        if _cash_rn is not None:
+            _cash_name = str(data_dict[_cash_rn].get('勘定科目') or '').strip()
+            _mark_used(_cash_name)
+            def _cash_val(period):
+                v = data_dict.get(_cash_rn, {}).get(period, 0)
+                try: return float(v) if v not in (None,'','""') else 0.0
+                except: return 0.0
+            genkin_from = _cash_val(p_from)
+            genkin_to   = _cash_val(p_to)
+        else:
+            genkin_from = ff(_ACCT['現金'], p_from)
+            genkin_to   = ff(_ACCT['現金'], p_to)
 
         # ── 営業CF ─────────────────────────────────────
+        # 当期純利益（dd154）使用記録
+        for _pl_nm in ['当期純利益','当期利益','税引後当期純利益','当期純損益']:
+            if _pl_nm in name_idx: _mark_used(_pl_nm); break
         c9  = i(_dd(154, p_to))   # 当期純利益（dd154直接参照）
 
         dep161 = _dd(161, p_to)
@@ -4539,8 +4752,36 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
             dep161 = _dd(90,p_to)+_dd(125,p_to)+_dd(126,p_to)
         c11 = i(dep161)           # 減価償却費
 
-        # c12: 営業CF性の引当金・未払項目（候補リストを全て合算）
-        c12 = i(da(_ACCT['引当金_リスト']))
+        # c12: 営業CF性の引当金・未払項目
+        # (1) 候補リストの科目を合算（表記ゆれ対応）
+        # (2) さらに分類が「引当金」系の科目を全て合算（名前に依存しない汎用捕捉）
+        #     ただし候補リストで既に拾った科目・集計見出しは二重計上しない
+        _c12_counted = set()
+        _c12_total_to = 0.0
+        _c12_total_from = 0.0
+        for nm in _ACCT['引当金_リスト']:
+            if nm in name_idx and nm not in _c12_counted:
+                _c12_counted.add(nm)
+                _mark_used(nm)
+                _c12_total_to   += _v(nm, p_to)
+                _c12_total_from += _v(nm, p_from)
+        # 分類に「引当金」を含む科目を追加捕捉（製品保証引当金・退職給与引当金・引当金の部等）
+        for rn0 in sorted(data_dict.keys()):
+            row0 = data_dict[rn0]
+            nm0  = str(row0.get('勘定科目') or '').strip()
+            sec0 = str(row0.get('分類') or row0.get('section') or '').strip()
+            if not nm0 or nm0 in _c12_counted:
+                continue
+            if '引当金' in sec0:
+                # 集計見出し（分類名と同じ「引当金の部」など）も実残高があれば計上対象
+                _c12_counted.add(nm0)
+                _mark_used(nm0)
+                vv_to = row0.get(p_to, 0); vv_from = row0.get(p_from, 0)
+                try: _c12_total_to += float(vv_to) if vv_to not in (None,'','""') else 0.0
+                except: pass
+                try: _c12_total_from += float(vv_from) if vv_from not in (None,'','""') else 0.0
+                except: pass
+        c12 = i(_c12_total_to - _c12_total_from)
 
         c14 = i(-d('受取手形'))
         c15 = i(-d('売掛金'))
@@ -4552,10 +4793,27 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         _c17_exclude.update(_ACCT['現金'])
         _c17_exclude.update(['受取手形', '売掛金'])
         _c17_exclude.update(_ACCT['棚卸資産'])
-        c17 = i(-dsec(_ACCT['その他流動資産'], ['流動資産'], _c17_exclude))
+        _c17_exclude.update(_ACCT['有価証券'])    # c26で計上
+        _c17_exclude.update(_ACCT['短期貸付金'])  # c27で計上
+        # 集計行を使う場合、有価証券・短期貸付金が小計に含まれていれば控除
+        _c17_raw = dsec(_ACCT['その他流動資産'], ['流動資産'], _c17_exclude)
+        # 集計行が存在する場合は、小計に含まれる有価証券・短期貸付金を別途控除
+        _agg_hit_c17 = any(nm in name_idx for nm in _ACCT['その他流動資産'])
+        if _agg_hit_c17:
+            # 小計に短期貸付金が含まれる場合のみ控除（分類が「流動資産」なら含まれる）
+            _stl_sec = str(data_dict.get(name_idx.get('短期貸付金',-1),{}).get('分類','')).strip()
+            if '短期貸付金' in name_idx and ('流動資産' in _stl_sec):
+                _c17_raw -= da(_ACCT['短期貸付金'])
+            _yuk_sec = str(data_dict.get(name_idx.get('有価証券',-1),{}).get('分類','')).strip()
+            if '有価証券' in name_idx and ('流動資産' in _yuk_sec):
+                # 有価証券が当座資産（その他流動資産小計外）にある場合は控除不要
+                # その他流動資産小計に含まれる場合のみ控除（通常は含まれない）
+                pass
+        c17 = i(-_c17_raw)
         c18 = i(d('支払手形'))
         c19 = i(d('買掛金'))
-        c20 = 0
+        # c20 前受金（未成工事受入金・前受金・前受収益）
+        c20 = i(da(_ACCT['前受金']))
         c20b = i(df(_ACCT['未払法人税']))     # 未払法人税等（候補リスト）
 
         # c21: その他流動負債
@@ -4563,14 +4821,32 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         # 既計上科目（買掛金・未払金・未払法人税・引当金リスト・支払手形）を控除
         def _ryudo_fusai(period):
             if '流動負債合計' in name_idx:
+                _mark_used('流動負債合計')
                 return _acct_first(name_idx, data_dict, ['流動負債合計'], period)
-            return _section_sum(name_idx, data_dict, ['流動負債'], period)
+            return _section_sum_tracked(['流動負債'], period)
         _ryudo_diff = _ryudo_fusai(p_to) - _ryudo_fusai(p_from)
+        # 短期借入金（c39で計上）が流動負債小計に含まれる場合は控除
+        _tanki_diff = d('短期借入金') if '短期借入金' in name_idx else 0
+        # 引当金リストのうち「流動負債」分類に属する科目の増減のみ控除
+        def _hikiate_in_section(section_names, period):
+            total = 0.0
+            for nm in _ACCT['引当金_リスト']:
+                rn0 = name_idx.get(nm)
+                if rn0 is None: continue
+                sec = str(data_dict[rn0].get('分類') or '').strip()
+                if sec in section_names or any(s in sec for s in section_names):
+                    vv = data_dict[rn0].get(period, 0)
+                    try: total += float(vv) if vv not in (None,'','""') else 0.0
+                    except: pass
+            return total
+        _hikiate_ryudo = _hikiate_in_section(['流動負債'], p_to) - _hikiate_in_section(['流動負債'], p_from)
         c21_deduct = (
             d('買掛金')
-            + d('未払金')
+            + d('未払金')               # c39で計上済み
+            + _tanki_diff               # c39で計上済みの短期借入金
             + df(_ACCT['未払法人税'])
-            + da(_ACCT['引当金_リスト'])  # c12と同じ科目群を控除
+            + da(_ACCT['前受金'])         # c20で計上済みを控除
+            + _hikiate_ryudo            # 流動負債側の引当金（c12計上済み）
             + d('支払手形')
         )
         c21 = i(_ryudo_diff - c21_deduct)
@@ -4580,30 +4856,38 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         # 長期借入金・役員長期借入金を控除
         def _kotei_fusai(period):
             if '固定負債合計' in name_idx:
+                _mark_used('固定負債合計')
                 return _acct_first(name_idx, data_dict, ['固定負債合計'], period)
-            return _section_sum(name_idx, data_dict, ['固定負債'], period)
+            return _section_sum_tracked(['固定負債'], period)
         _kotei_diff = _kotei_fusai(p_to) - _kotei_fusai(p_from)
+        # 引当金リストのうち「固定負債」分類に属する科目の増減のみ控除
+        _hikiate_kotei = _hikiate_in_section(['固定負債'], p_to) - _hikiate_in_section(['固定負債'], p_from)
         c22 = i(
             _kotei_diff
             - d('長期借入金')
             - df(_ACCT['役員借入金'])   # 役員長期借入金（候補リスト）
+            - _hikiate_kotei           # 固定負債側の引当金（c12計上済み）
         )
         c23 = 0
         c24 = c9+c11+c12+c14+c15+c16+c17+c18+c19+c20+c20b+c21+c22+c23
 
         # ── 投資CF ─────────────────────────────────────
+        # c26 有価証券（流動資産だが投資活動）
+        c26 = i(-da(_ACCT['有価証券']))
+        # c27 短期貸付金（流動資産だが投資活動）
+        c27 = i(-da(_ACCT['短期貸付金']))
         c28 = i(-d('土地'))
         # c29 減価償却資産: 有形固定資産（土地・建設仮勘定を除く）の増減＋減価償却費
         # 集計行(有形固定資産合計)があれば「合計-土地-建設仮勘定」、なければ分類合算
         def _hyt(period):
             if '有形固定資産合計' in name_idx:
+                _mark_used('有形固定資産合計')
                 base = _acct_first(name_idx, data_dict, ['有形固定資産合計'], period)
                 base -= _v('土地', period) or 0
                 base -= _v('建設仮勘定', period) or 0
                 return base
             else:
-                return _section_sum(name_idx, data_dict, ['有形固定資産'],
-                                    period, {'土地', '建設仮勘定'})
+                return _section_sum_tracked(['有形固定資産'], period, {'土地', '建設仮勘定'})
         hyt_to   = _hyt(p_to)
         hyt_from = _hyt(p_from)
         c29 = i(-((hyt_to - hyt_from) + c11))
@@ -4612,7 +4896,7 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         # c34 その他固定資産: 投資その他の資産合計（集計行）優先、なければ分類合算
         c34 = i(-dsec(_ACCT['投資その他資産'], ['投資その他の資産']))
         c35 = i(-d('繰延資産'))
-        c36 = c28+c29+c30+c31+c34+c35
+        c36 = c26+c27+c28+c29+c30+c31+c34+c35
         c37 = c24+c36
 
         # ── 財務CF ─────────────────────────────────────
@@ -4630,7 +4914,9 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
             '繰越利益剰余金・前期末残高',
             '利益剰余金合計',
         ]
-        rieki_rn = next((name_idx[k] for k in _rieki_candidates if k in name_idx), None)
+        rieki_key = next((k for k in _rieki_candidates if k in name_idx), None)
+        rieki_rn = name_idx.get(rieki_key) if rieki_key else None
+        if rieki_key: _mark_used(rieki_key)
         rieki70_diff = (_dd(rieki_rn, p_to) - _dd(rieki_rn, p_from)) if rieki_rn else 0
         c44 = -i(_dd(154, p_to) - rieki70_diff)
 
@@ -4647,9 +4933,10 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         return dict(
             c9=c9, c11=c11, c12=c12, c14=c14, c15=c15, c16=c16, c17=c17,
             c18=c18, c19=c19, c20=c20, c20b=c20b, c21=c21, c22=c22, c23=c23, c24=c24,
-            c28=c28, c29=c29, c30=c30, c31=c31, c34=c34, c35=c35,
+            c26=c26, c27=c27, c28=c28, c29=c29, c30=c30, c31=c31, c34=c34, c35=c35,
             c39=c39, c40=c40, c41=c41, c42=c42, c43=c43, c44=c44,
             c45=c45, c46=c46, c47=c47, c48=c48, c49=c49, c50=c50,
+            _used=set(_used_names),
         )
 
     zenki = _calc('前々期', '前期')
@@ -4675,8 +4962,8 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         ('　　１１．利益処分による役員賞与の支払（－）額',           2,'c23', 'c23'),
         ('（Ⅰの計）',                                            3, None,  None),
         ('Ⅱ　投資活動によるキャッシュ・フロー',                    0, None,  None),
-        ('　　　１．有価証券の増加（－）・減少（＋）額',             2, None,  None),
-        ('　　　２．短期貸付金の増加（－）・減少（＋）額',           2, None,  None),
+        ('　　　１．有価証券の増加（－）・減少（＋）額',             2,'c26','c26'),
+        ('　　　２．短期貸付金の増加（－）・減少（＋）額',           2,'c27','c27'),
         ('　　　３．土地の増加（－）・減少（＋）額',                2,'c28','c28'),
         ('　　　４．減価償却資産の増加（－）・減少（＋）額',         2,'c29','c29'),
         ('　　　５．建設仮勘定の増加（－）・減少（＋）額',           2,'c30','c30'),
@@ -4708,13 +4995,16 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         z_val = zenki.get(zk) if zk else None
         k_val = konki.get(kk) if kk else None
         if   label == '（Ⅰの計）':          z_val=zenki['c24']; k_val=konki['c24']
-        elif label == '（Ⅱの計）':          z_val=zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']; k_val=konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']
-        elif 'フリー' in label:              z_val=zenki['c24']+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']; k_val=konki['c24']+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']
+        elif label == '（Ⅱの計）':          z_val=zenki.get('c26',0)+zenki.get('c27',0)+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']; k_val=konki.get('c26',0)+konki.get('c27',0)+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']
+        elif 'フリー' in label:              z_val=zenki['c24']+zenki.get('c26',0)+zenki.get('c27',0)+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']; k_val=konki['c24']+konki.get('c26',0)+konki.get('c27',0)+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']
         elif label == '（Ⅲの計）':          z_val=zenki['c45']; k_val=konki['c45']
-        elif 'Ⅳ' in label:                 z_val=zenki['c24']+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']+zenki['c45']; k_val=konki['c24']+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']+konki['c45']
+        elif 'Ⅳ' in label:                 z_val=zenki['c24']+zenki.get('c26',0)+zenki.get('c27',0)+zenki['c28']+zenki['c29']+zenki['c30']+zenki['c31']+zenki['c34']+zenki['c35']+zenki['c45']; k_val=konki['c24']+konki.get('c26',0)+konki.get('c27',0)+konki['c28']+konki['c29']+konki['c30']+konki['c31']+konki['c34']+konki['c35']+konki['c45']
         return {'label':label,'lv':lv,'level':lv,'zenki':z_val,'konki':k_val,'zk':zk,'kk':kk}
 
     rows = [make_row(l,lv,zk,kk) for l,lv,zk,kk in CF_ROWS]
+
+    # 前期・今期で実際に使用した勘定科目名を統合
+    _used_all = set(zenki.get('_used', set())) | set(konki.get('_used', set()))
 
     return {
         'rows': rows,
@@ -4722,6 +5012,7 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         'konki': konki,
         'period_zenki': period_zenki,
         'period_konki': period_konki,
+        'used_names': _used_all,
     }
 
 
@@ -5079,14 +5370,17 @@ try:
     if _fixes:  print("[自動修正]", " / ".join(_fixes))
     if _alerts: print("[アラート]", " / ".join(_alerts))
 
-    # 未割当て勘定科目の検出（A案：人間承認UI）
-    _unassigned = detect_unassigned_accounts(data_dict)
+    # CF計算（実際に使用した勘定科目を取得するため先に実行）
+    _cf_data = calc_cf_from_data_dict(data_dict, closing_dates)
+    _used_names = _cf_data.get('used_names', set())
+
+    # 未割当て勘定科目の検出（A案：人間承認UI／used-set実測ベース）
+    _unassigned = detect_unassigned_accounts(data_dict, _used_names)
     _approval_html = generate_approval_ui_html(_unassigned)
     if _unassigned:
         print(f"[未割当て科目] {len(_unassigned)}件の要確認科目を検出:",
               " / ".join(f"{u['name']}(行{u['rn']})" for u in _unassigned))
 
-    _cf_data = calc_cf_from_data_dict(data_dict, closing_dates)
     _keiei_html = generate_keiei_shihyo_html(data_dict, closing_dates)
     full_html = full_html + _validation_html + generate_cf_html(_cf_data) + _approval_html + create_table_rows([(157, 159)], "入力項目／集計項目") + _keiei_html
     print(f"✅ CF計算書HTML生成完了: 前期={_cf_data['period_zenki']}, 今期={_cf_data['period_konki']}")
