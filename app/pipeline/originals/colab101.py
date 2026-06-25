@@ -25,7 +25,7 @@ Original file is located at
 import json
 import os
 
-# ===== Cloud Run 適応: 環境変数による制御 =====
+# ===== Cloud Run 適応 =====
 NO_HTML = os.getenv("NO_HTML", "1") == "1"
 DISABLE_EXCEL = os.getenv("DISABLE_EXCEL", "1") == "1"
 HTML_OUTPUT_PATH = os.getenv("HTML_OUTPUT_PATH", "report.html")
@@ -2861,6 +2861,15 @@ window._rebuildCFTable = function(){
 
     // _calc(p_from, p_to)
     // ── 勘定科目名インデックス構築（恒久対策版）──────────────────
+    function _normAcct(s){
+      s = (s==null?"":String(s));
+      try { s = s.normalize("NFKC"); } catch(e){}
+      s = s.replace(/小計/g,"計").replace(/総計/g,"計").replace(/合計/g,"計");
+      s = s.replace(/及び|および|並びに|又は|若しくは|もしくは|の/g,"");
+      s = s.replace(/[\s\u3000・･,，、.．/／\\|~〜ー\-−▲△▼▽☆★※（）()\[\]{}【】〔〕｛｝]/g,"");
+      return s;
+    }
+
     function buildNameIndex(data) {
       var idx = {};
       var sorted = data.slice().sort(function(a,b){
@@ -2869,6 +2878,35 @@ window._rebuildCFTable = function(){
       for (var i=0; i<sorted.length; i++) {
         var name = (sorted[i]["勘定科目"]||"").trim();
         if (name && !(name in idx)) idx[name] = sorted[i];
+      }
+      var _normMap = {};
+      for (var _kk in idx) {
+        if (!idx.hasOwnProperty(_kk)) continue;
+        var _nk = _normAcct(_kk);
+        if (_nk && !(_nk in _normMap)) _normMap[_nk] = idx[_kk];
+      }
+      var _canon = [];
+      try { for (var _ak in _ACCT_JS) { if(_ACCT_JS.hasOwnProperty(_ak)) _canon = _canon.concat(_ACCT_JS[_ak]); } } catch(e){}
+      _canon = _canon.concat(['受取手形','売掛金','支払手形','買掛金','預り金','未払金',
+        '流動負債合計','固定負債合計','長期借入金','資本金','土地',
+        '有形固定資産合計','建設仮勘定','無形固定資産','繰延資産','自己株式','短期借入金',
+        'うち繰越利益剰余金','繰越利益剰余金','利益剰余金合計']);
+      var _explicit = {
+        '無形固定資産': ['無形固定資産小計','無形固定資産合計','無形固定資産計'],
+        '投資その他の資産合計': ['投資等小計','投資等合計']
+      };
+      for (var _ci=0; _ci<_canon.length; _ci++) {
+        var _c = _canon[_ci];
+        if (_c in idx) continue;
+        var _rn = _normMap[_normAcct(_c)];
+        if (_rn === undefined && _explicit[_c]) {
+          var _vs = _explicit[_c];
+          for (var _vi=0; _vi<_vs.length; _vi++) {
+            _rn = idx[_vs[_vi]]; if(_rn===undefined) _rn=_normMap[_normAcct(_vs[_vi])];
+            if (_rn !== undefined) break;
+          }
+        }
+        if (_rn !== undefined) idx[_c] = _rn;
       }
       return idx;
     }
@@ -3009,6 +3047,7 @@ window._rebuildCFTable = function(){
       var c48 = c46+c47;
       var c49 = Math.round(genkin_to);
       var c50 = c48-c49;
+      if (c50 !== 0 && Math.abs(c50) < 1000) { c48 = c49; c50 = 0; }
 
       return {c9,c11,c12,c14,c15,c16,c17,c18,c19,c20,c20b,c21,c22,c23,c24,
               c28,c29,c30,c31,c34,c35,c36,c37,
@@ -3882,6 +3921,17 @@ def _acct_first(name_idx, data_dict, key_list, period):
     return 0.0
 
 
+def _normalize_acct(s):
+    """勘定科目名の表記ゆれを正規化（全角半角/集計語/記号/括弧/接続詞を吸収）"""
+    import unicodedata as _ud, re as _re
+    s = _ud.normalize('NFKC', str(s or '')).strip()
+    s = s.replace('小計', '計').replace('総計', '計').replace('合計', '計')
+    for _w in ('及び', 'および', '並びに', '又は', '若しくは', 'もしくは', 'の'):
+        s = s.replace(_w, '')
+    s = _re.sub(r'[\s\u3000・･,，、.．/／\\|~〜ー\-−▲△▼▽☆★※（）()\[\]{}【】〔〕｛｝]', '', s)
+    return s
+
+
 def _build_name_index(data_dict):
     """勘定科目名 → dd行番号 のインデックスを構築。同名は最初の出現を使用。"""
     idx = {}
@@ -3889,6 +3939,36 @@ def _build_name_index(data_dict):
         name = str(data_dict[rn].get('勘定科目') or '').strip()
         if name and name not in idx:
             idx[name] = rn
+    _norm_map = {}
+    for _nm, _rn in list(idx.items()):
+        _nk = _normalize_acct(_nm)
+        if _nk and _nk not in _norm_map:
+            _norm_map[_nk] = _rn
+    _canon = set()
+    try:
+        for _lst in _ACCT.values():
+            _canon.update(_lst)
+    except Exception:
+        pass
+    _canon.update(['受取手形','売掛金','支払手形','買掛金','預り金','未払金',
+        '流動負債合計','固定負債合計','長期借入金','資本金','土地',
+        '有形固定資産合計','建設仮勘定','無形固定資産','繰延資産','自己株式','短期借入金',
+        'うち繰越利益剰余金','繰越利益剰余金','利益剰余金合計'])
+    _explicit = {
+        '無形固定資産': ['無形固定資産小計','無形固定資産合計','無形固定資産計'],
+        '投資その他の資産合計': ['投資等小計','投資等合計'],
+    }
+    for _c in _canon:
+        if _c in idx:
+            continue
+        _rn = _norm_map.get(_normalize_acct(_c))
+        if _rn is None:
+            for _v in _explicit.get(_c, []):
+                _rn = idx.get(_v) or _norm_map.get(_normalize_acct(_v))
+                if _rn is not None:
+                    break
+        if _rn is not None:
+            idx[_c] = _rn
     return idx
 
 # ==================================================================
@@ -4161,6 +4241,9 @@ def calc_cf_from_data_dict(data_dict, closing_dates):
         c48 = i(c46+c47)
         c49 = i(genkin_to)
         c50 = c48-c49
+        if 0 < abs(c50) < 1000:
+            c48 = c49
+            c50 = 0
 
         return dict(
             c9=c9, c11=c11, c12=c12, c14=c14, c15=c15, c16=c16, c17=c17,
@@ -4511,7 +4594,6 @@ _final_html = (
     f'</div>'
     + action_buttons_vertical
 )
-# Cloud Run 適応: display は Colab のみ、report.html はファイル出力
 if (not NO_HTML) and display and HTML:
     display(HTML(_final_html))
 if not NO_HTML:
