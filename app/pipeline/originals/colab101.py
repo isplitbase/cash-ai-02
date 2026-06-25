@@ -5389,13 +5389,23 @@ except Exception as _e:
     print(f"⚠️ CF計算書の生成でエラー: {_e}")
     traceback.print_exc()
 
+# ===== ビルド版数刻印（リリース確認用）=====
+_BUILD_VERSION = "cash-ai-02 / src:_25_汎用化対応 / patch:正規化+端数スナップ / build:2026-06-25"
+_build_stamp_comment = f'<!-- BUILD_VERSION: {_BUILD_VERSION} -->'
+_build_stamp_visible = (
+    f'<div data-build-version="{_BUILD_VERSION}"'
+    f' style="text-align:right;color:#9aa;font-size:10px;padding:2px 8px;">'
+    f'ver: {_BUILD_VERSION}</div>'
+)
 _final_html = (
+    _build_stamp_comment +
     style + data_tag + script + modal_html +
     action_buttons_vertical +
     f'<div id="report-container" class="show-all">'
     f'{_spec_warning_html}{full_html}'
     f'</div>'
     + action_buttons_vertical
+    + _build_stamp_visible
 )
 if (not NO_HTML) and display and HTML:
     display(HTML(_final_html))
